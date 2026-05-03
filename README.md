@@ -21,6 +21,18 @@ A local-first coding agent that looks and feels like Claude Code, but runs entir
 
 ## Quick start
 
+### One-shot install (macOS)
+
+```bash
+git clone https://github.com/ClarkOhlenbusch/not-claude-code
+cd not-claude-code
+./scripts/install.sh
+```
+
+The installer is idempotent and prompts before any heavy step (Homebrew install, 9 GB model pull). It checks/installs Xcode CLT, Homebrew, Rust, and Ollama; starts the Ollama daemon; builds the release binary; symlinks `notclaude` into `~/.local/bin`; and pulls the default model.
+
+### Manual install
+
 Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~10 GB free disk.
 
 ```bash
