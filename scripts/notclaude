@@ -24,16 +24,13 @@ INVOKED_NAME="$(basename "$0")"
 COMPUTE_QWEN36_MODEL="Qwen/Qwen3.6-35B-A3B-FP8"
 COMPUTE_QWEN36_BASE_URL="${COMPUTE_QWEN36_BASE_URL:-https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1}"
 COMPUTE_KEY="${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}"
+DEFAULT_MODEL="swarm"
 
 if [ "$INVOKED_NAME" = "notclaude-coinflip" ] || [ "${NOTCLAUDE_COINFLIP_LAUNCHER:-0}" = "1" ]; then
   export NOTCLAUDE_SWARM="${NOTCLAUDE_SWARM:-1}"
   DEFAULT_MODEL="${NOTCLAUDE_COINFLIP_MODEL:-${NOTCLAUDE_DEFAULT_MODEL:-coinflip}}"
 elif [ -n "${NOTCLAUDE_DEFAULT_MODEL:-}" ]; then
   DEFAULT_MODEL="$NOTCLAUDE_DEFAULT_MODEL"
-elif [ -n "$COMPUTE_KEY" ]; then
-  DEFAULT_MODEL="qwen36"
-else
-  DEFAULT_MODEL="gemma4:e2b"
 fi
 OLLAMA_URL="${NOTCLAUDE_OLLAMA_URL:-${OLLAMA_BASE_URL:-http://localhost:11434}}"
 OLLAMA_URL="${OLLAMA_URL%/v1}"
@@ -115,7 +112,13 @@ if ! curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null; then
     exit 1
   fi
   echo "notclaude: starting ollama server..." >&2
-  ollama serve >/dev/null 2>&1 &
+  # OLLAMA_CONTEXT_LENGTH: bump from default 4096 to 32K so models can hold
+  #   the whole system prompt + tool definitions + multi-turn results without
+  #   truncating. The default 4K causes catastrophic slowness (model
+  #   re-thinks each turn because earlier context fell off).
+  # OLLAMA_KEEP_ALIVE: keep the model resident across prompts so we don't
+  #   pay the ~10s cold-load cost between turns.
+  OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_KEEP_ALIVE=24h ollama serve >/dev/null 2>&1 &
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
     curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null && break
@@ -123,14 +126,15 @@ if ! curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null; then
 fi
 
 if [ "$USES_HIVE_LOGIC" -eq 0 ] && [ "$REQUESTED_MODEL" = "$DEFAULT_MODEL" ]; then
-  if ! curl -sf "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "\"$DEFAULT_MODEL\""; then
-    if [ "${NOTCLAUDE_AUTO_PULL:-1}" = "0" ]; then
+  # Skip the Ollama-tag pull check for the 'swarm' pseudo-model — it's
+  # not a real Ollama model, it's the orchestrator runtime that
+  # internally dispatches to whatever models RoleConfig configures.
+  if [ "$DEFAULT_MODEL" != "swarm" ] && [ "$DEFAULT_MODEL" != "notclaude-swarm" ]; then
+    if ! curl -sf "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "\"$DEFAULT_MODEL\""; then
       echo "notclaude: default model $DEFAULT_MODEL not pulled" >&2
       echo "  pull it with: ollama pull $DEFAULT_MODEL" >&2
       exit 1
     fi
-    echo "notclaude: pulling default model $DEFAULT_MODEL..." >&2
-    ollama pull "$DEFAULT_MODEL"
   fi
 fi
 

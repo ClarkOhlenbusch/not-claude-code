@@ -164,7 +164,8 @@ pub(crate) fn render_init_claw_md(cwd: &Path) -> String {
     let mut lines = vec![
         "# NOTCLAUDE.md".to_string(),
         String::new(),
-        "This file provides guidance to NOT Claude Code when working with code in this repository.".to_string(),
+        "This file provides guidance to NOT Claude Code when working with code in this repository."
+            .to_string(),
         String::new(),
     ];
 
@@ -386,7 +387,8 @@ mod tests {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("create root");
         fs::write(root.join("NOTCLAUDE.md"), "custom guidance\n").expect("write existing claw md");
-        fs::write(root.join(".gitignore"), ".notclaude/settings.local.json\n").expect("write gitignore");
+        fs::write(root.join(".gitignore"), ".notclaude/settings.local.json\n")
+            .expect("write gitignore");
 
         let first = initialize_repo(&root).expect("first init should succeed");
         assert!(first
@@ -403,7 +405,10 @@ mod tests {
             "custom guidance\n"
         );
         let gitignore = fs::read_to_string(root.join(".gitignore")).expect("read gitignore");
-        assert_eq!(gitignore.matches(".notclaude/settings.local.json").count(), 1);
+        assert_eq!(
+            gitignore.matches(".notclaude/settings.local.json").count(),
+            1
+        );
         assert_eq!(gitignore.matches(".notclaude/sessions/").count(), 1);
 
         fs::remove_dir_all(root).expect("cleanup temp dir");

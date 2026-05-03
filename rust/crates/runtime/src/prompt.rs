@@ -432,7 +432,7 @@ fn render_config_section(config: &RuntimeConfig) -> String {
     let mut lines = vec!["# Runtime config".to_string()];
     if config.loaded_entries().is_empty() {
         lines.extend(prepend_bullets(vec![
-            "No NOT Claude Code settings files loaded.".to_string()
+            "No NOT Claude Code settings files loaded.".to_string(),
         ]));
         return lines.join("\n");
     }
@@ -568,8 +568,11 @@ mod tests {
             "apps dot claw instructions",
         )
         .expect("write apps dot claw instructions");
-        fs::write(nested.join(".notclaude").join("NOTCLAUDE.md"), "nested rules")
-            .expect("write nested rules");
+        fs::write(
+            nested.join(".notclaude").join("NOTCLAUDE.md"),
+            "nested rules",
+        )
+        .expect("write nested rules");
         fs::write(
             nested.join(".notclaude").join("instructions.md"),
             "nested instructions",

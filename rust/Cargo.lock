@@ -186,10 +186,13 @@ dependencies = [
  "commands",
  "compat-harness",
  "crossterm",
+ "orchestrator",
  "plugins",
  "pulldown-cmark",
+ "reqwest",
  "runtime",
  "rustyline",
+ "serde",
  "serde_json",
  "syntect",
  "tokio",
@@ -933,6 +936,17 @@ checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
 dependencies = [
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "orchestrator"
+version = "0.1.0"
+dependencies = [
+ "api",
+ "runtime",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

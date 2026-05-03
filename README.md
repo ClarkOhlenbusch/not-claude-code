@@ -21,28 +21,50 @@ A local-first coding agent that looks and feels like Claude Code, but runs entir
 
 ## Quick start
 
-Prereqs: Rust 1.90+, Ollama (`brew install ollama`), and either a Compute Community key or the small local `gemma4:e2b` model.
+### One-shot install (macOS)
+
+```bash
+git clone https://github.com/ClarkOhlenbusch/not-claude-code
+cd not-claude-code
+./scripts/install.sh
+```
+
+The installer is idempotent and prompts before any heavy step (Homebrew install, 9 GB model pull). It checks/installs Xcode CLT, Homebrew, Rust, and Ollama; starts the Ollama daemon; builds the release binary; symlinks `notclaude` into `~/.local/bin`; and pulls the default model.
+
+### Manual install
+
+Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~10 GB free disk.
 
 ```bash
 git clone https://github.com/ClarkOhlenbusch/not-claude-code
 cd not-claude-code
 
-# Install the wrapper commands (notclaude and notclaude-coinflip)
-./scripts/install-notclaude
+# Build optimized binary (~16s first time, ~3s incremental)
+(cd rust && cargo build --release)
 
-# Use it. First launch auto-builds the Rust binary if missing. By default,
-# notclaude uses Compute Qwen 3.6 when a key is present, otherwise gemma4:e2b.
+# Install the wrapper command (creates ~/.local/bin/notclaude -> scripts/notclaude)
+mkdir -p ~/.local/bin && ln -sf "$PWD/scripts/notclaude" ~/.local/bin/notclaude
+
+# Pull the recommended model (~9 GB, one-time)
+ollama pull qwen2.5-coder:14b
+
+# Use it (Ollama auto-starts if not already running)
 notclaude "say hi"                     # one-shot prompt
 notclaude                              # interactive REPL
-notclaude-coinflip                     # interactive REPL with coinflip/swarm orchestration
-notclaude --model qwen36 "…"           # force Compute Qwen 3.6
+notclaude --model qwen2.5-coder:7b "…" # smaller / faster (less reliable for agentic tasks)
 ```
 
-The installer puts `~/.local/bin` on your shell path when needed. The wrapper builds `rust/target/release/notclaude` only when the binary is missing, or when `NOTCLAUDE_AUTO_BUILD=1` is set. For normal launches, it defaults `--model` to `qwen36` when `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` is set; otherwise it uses local `gemma4:e2b`. It also installs `notclaude-coinflip`, which launches the same CLI with `NOTCLAUDE_SWARM=1` and `--model coinflip` unless you override it.
+Make sure `~/.local/bin` is on your `$PATH`. The wrapper sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL=http://localhost:11434/v1`, and defaults `--model` to `swarm`.
 
 ### Coinflip launcher
 
-`notclaude-coinflip` is the dedicated entry point for the project orchestration logic. It uses the existing swarm path in the Rust CLI: GPT-5.5 distills and evaluates, then local/remote worker models attempt the task. The launcher configures Ollama for worker models while leaving your real `OPENAI_API_KEY` available for the orchestrator. Tune the lineup with env vars:
+Install the dedicated coinflip entry point when you want an explicit command for the project orchestration logic:
+
+```bash
+./scripts/install-notclaude-coinflip
+```
+
+`notclaude-coinflip` uses the existing swarm path in the Rust CLI: GPT-5.5 distills and evaluates, then local/remote worker models attempt the task. The launcher configures Ollama for worker models while leaving your real `OPENAI_API_KEY` available for the orchestrator. Tune the lineup with env vars:
 
 ```bash
 notclaude-coinflip

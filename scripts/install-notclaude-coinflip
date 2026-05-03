@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the notclaude launcher into a bin directory available to the shell.
+# Install the notclaude-coinflip launcher into a bin directory available to the shell.
 
 set -euo pipefail
 
@@ -21,11 +21,9 @@ if [ -z "$BIN_DIR" ]; then
   BIN_DIR="$HOME/.local/bin"
 fi
 
-TARGET="$BIN_DIR/notclaude"
 COINFLIP_TARGET="$BIN_DIR/notclaude-coinflip"
 
 mkdir -p "$BIN_DIR"
-ln -sf "$REPO_ROOT/scripts/notclaude" "$TARGET"
 ln -sf "$REPO_ROOT/scripts/notclaude" "$COINFLIP_TARGET"
 
 case ":$PATH:" in
@@ -42,14 +40,11 @@ case ":$PATH:" in
     ;;
 esac
 
-echo "notclaude installed at $TARGET"
 echo "notclaude-coinflip installed at $COINFLIP_TARGET"
-if command -v notclaude >/dev/null 2>&1 && command -v notclaude-coinflip >/dev/null 2>&1; then
-  echo "Run: notclaude"
+if command -v notclaude-coinflip >/dev/null 2>&1; then
   echo "Coinflip: notclaude-coinflip"
 else
   echo "Current shell cannot see $BIN_DIR yet."
   echo "Run now: export PATH=\"$BIN_DIR:\$PATH\""
-  echo "Then: notclaude"
-  echo "Coinflip: notclaude-coinflip"
+  echo "Then: notclaude-coinflip"
 fi

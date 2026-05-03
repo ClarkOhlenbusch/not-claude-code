@@ -1,5 +1,7 @@
 mod init;
 mod input;
+mod model_picker;
+mod ollama;
 mod render;
 
 use std::collections::BTreeSet;
@@ -466,16 +468,15 @@ fn format_direct_slash_command_error(command: &str, is_unknown: bool) -> String 
     lines.join("\n")
 }
 
-fn resolve_model_alias(model: &str) -> &str {
+fn resolve_model_alias(model: &str) -> String {
     match model {
-        "opus" => "claude-opus-4-6",
-        "sonnet" => "claude-sonnet-4-6",
-        "haiku" => "claude-haiku-4-5-20251213",
-        "gpt" => "gpt-5.5",
-        "coinflip" | "notclaude-coinflip" => "swarm",
-        "qwen36" | "qwen3.6" | "runpod-qwen36" => "Qwen/Qwen3.6-35B-A3B-FP8",
-        _ => model,
+        "coinflip" | "notclaude-coinflip" => "swarm".to_string(),
+        _ => api::resolve_model_alias(model),
     }
+}
+
+fn is_ollama_target(model: &str) -> bool {
+    matches!(api::detect_provider_kind(model), api::ProviderKind::Ollama)
 }
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
@@ -828,6 +829,14 @@ struct StatusUsage {
 }
 
 fn format_model_report(model: &str, message_count: usize, turns: u32) -> String {
+    let installed = ollama::list_pulled().unwrap_or_default();
+    let local_status = |canonical: &str| -> String {
+        installed
+            .iter()
+            .find(|m| m.name == canonical)
+            .map(|m| format!("ready · {}", ollama::format_bytes(m.size_bytes)))
+            .unwrap_or_else(|| "pull on switch".to_string())
+    };
     format!(
         "Model
   Current          {model}
@@ -838,13 +847,17 @@ Aliases
   sonnet           claude-sonnet-4-6
   haiku            claude-haiku-4-5-20251213
   gpt              gpt-5.5                  (OpenAI · Codex login)
-  qwen-coder       qwen3-coder:30b           (local · Ollama)
-  glm-flash        glm-4.7-flash:q4          (local · Ollama)
-  gemma            gemma4:26b                (local · Ollama)
+  qwen36           Qwen/Qwen3.6-35B-A3B-FP8  (Compute Community)
+  qwen-coder       qwen3-coder:30b           ({qwen_status})
+  glm-flash        glm-4.7-flash:q4          ({glm_status})
+  gemma            gemma4:26b                ({gemma_status})
 
 Next
-  /model           Show the current model
-  /model <name>    Switch models for this REPL session"
+  /model           Open interactive picker
+  /model <name>    Switch models for this REPL session",
+        qwen_status = local_status("qwen3-coder:30b"),
+        glm_status = local_status("glm-4.7-flash:q4"),
+        gemma_status = local_status("gemma4:26b"),
     )
 }
 
@@ -1277,12 +1290,28 @@ struct ManagedSessionSummary {
     message_count: usize,
 }
 
+/// Wrapper that gives `Box<dyn ApiClient + Send>` an `ApiClient` impl —
+/// we can't impl a foreign trait on a foreign type from the binary crate
+/// (orphan rule), so we wrap it. Lets `ConversationRuntime` hold either the
+/// direct `DefaultRuntimeClient` or the orchestrator-wrapped version through
+/// the same generic parameter.
+struct ApiClientHandle(Box<dyn runtime::ApiClient + Send>);
+
+impl runtime::ApiClient for ApiClientHandle {
+    fn stream(
+        &mut self,
+        request: runtime::ApiRequest,
+    ) -> Result<Vec<runtime::AssistantEvent>, runtime::RuntimeError> {
+        self.0.stream(request)
+    }
+}
+
 struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     system_prompt: Vec<String>,
-    runtime: ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>,
+    runtime: ConversationRuntime<ApiClientHandle, CliToolExecutor>,
     session: SessionHandle,
 }
 
@@ -1563,19 +1592,25 @@ impl LiveCli {
     }
 
     fn set_model(&mut self, model: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some(model) = model else {
-            println!(
-                "{}",
-                format_model_report(
-                    &self.model,
-                    self.runtime.session().messages.len(),
-                    self.runtime.usage().turns(),
-                )
-            );
-            return Ok(false);
+        let raw_target = match model {
+            Some(value) => value,
+            None => match model_picker::run(&self.model)? {
+                model_picker::PickerOutcome::Selected(value) => value,
+                model_picker::PickerOutcome::Cancelled => {
+                    println!(
+                        "{}",
+                        format_model_report(
+                            &self.model,
+                            self.runtime.session().messages.len(),
+                            self.runtime.usage().turns(),
+                        )
+                    );
+                    return Ok(false);
+                }
+            },
         };
 
-        let model = resolve_model_alias(&model).to_string();
+        let model = resolve_model_alias(&raw_target).to_string();
 
         if model == self.model {
             println!(
@@ -1587,6 +1622,14 @@ impl LiveCli {
                 )
             );
             return Ok(false);
+        }
+
+        if is_ollama_target(&model) && !ollama::is_installed(&model) {
+            println!("Pulling {model} (not installed locally)");
+            if let Err(e) = ollama::pull_with_progress(&model, std::io::stdout()) {
+                eprintln!("model switch aborted: {e}");
+                return Ok(false);
+            }
         }
 
         let previous = self.model.clone();
@@ -3153,19 +3196,47 @@ fn build_runtime(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     progress_reporter: Option<InternalPromptProgressReporter>,
-) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
-{
+) -> Result<ConversationRuntime<ApiClientHandle, CliToolExecutor>, Box<dyn std::error::Error>> {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
+
+    // Detect swarm pseudo-models. They route through OrchestratorRuntime
+    // which (Phase 1) is a transparent wrapper that adds [role:coder] tags
+    // around a single inner DefaultRuntimeClient. Phase 3+ will replace the
+    // single inner with role-specific calls.
+    let is_swarm = matches!(model.as_str(), "swarm" | "notclaude-swarm");
+    let coder_model = if is_swarm {
+        // Pull from RoleConfig::default() so updates to the swarm's coder
+        // model live in one place (orchestrator/src/roles.rs).
+        orchestrator::RoleConfig::default().coder_model
+    } else {
+        model.clone()
+    };
+
+    let inner_client = DefaultRuntimeClient::new(
+        coder_model,
+        enable_tools,
+        emit_output,
+        allowed_tools.clone(),
+        tool_registry.clone(),
+        progress_reporter,
+    )?;
+
+    let api_client: Box<dyn runtime::ApiClient + Send> = if is_swarm {
+        // Phase 3-4: planner + reviewer + retry are active. Phase 1's
+        // transparent passthrough was just `with_default_roles`.
+        Box::new(
+            orchestrator::OrchestratorRuntime::with_orchestration_enabled(
+                Box::new(inner_client),
+                orchestrator::RoleConfig::default(),
+            ),
+        )
+    } else {
+        Box::new(inner_client)
+    };
+
     Ok(ConversationRuntime::new_with_features(
         session,
-        DefaultRuntimeClient::new(
-            model,
-            enable_tools,
-            emit_output,
-            allowed_tools.clone(),
-            tool_registry.clone(),
-            progress_reporter,
-        )?,
+        ApiClientHandle(api_client),
         CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
         permission_policy(permission_mode, &tool_registry),
         system_prompt,
@@ -3417,7 +3488,6 @@ impl SwarmState {
             .map(str::trim)
             .filter(|model| !model.is_empty())
             .map(resolve_model_alias)
-            .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         let max_attempts = env::var("NOTCLAUDE_SWARM_MAX_ATTEMPTS")
             .ok()
@@ -3427,7 +3497,10 @@ impl SwarmState {
         Self {
             orchestrator_model: resolve_model_alias(&orchestrator_model).to_string(),
             worker_models: if worker_models.is_empty() {
-                vec!["runpod-qwen36".to_string(), "gemma4:e2b".to_string()]
+                vec![
+                    resolve_model_alias("runpod-qwen36"),
+                    resolve_model_alias("gemma4:e2b"),
+                ]
             } else {
                 worker_models
             },
@@ -3497,10 +3570,13 @@ async fn send_model_message(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(300);
-    tokio::time::timeout(Duration::from_secs(timeout_secs), client.send_message(&request))
-        .await
-        .map_err(|_| RuntimeError::new(format!("{model}: timed out after {timeout_secs}s")))?
-        .map_err(|error| RuntimeError::new(error.to_string()))
+    tokio::time::timeout(
+        Duration::from_secs(timeout_secs),
+        client.send_message(&request),
+    )
+    .await
+    .map_err(|_| RuntimeError::new(format!("{model}: timed out after {timeout_secs}s")))?
+    .map_err(|error| RuntimeError::new(error.to_string()))
 }
 
 async fn send_plain_model_message(
