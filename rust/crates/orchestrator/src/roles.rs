@@ -105,3 +105,80 @@ impl RoleConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RoleConfig;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned")
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn from_env_uses_launcher_orchestrator_and_first_worker_model() {
+        let _lock = env_lock();
+        let _orchestrator = EnvVarGuard::set("NOTCLAUDE_SWARM_ORCHESTRATOR", Some("gpt-5.5"));
+        let _workers = EnvVarGuard::set(
+            "NOTCLAUDE_SWARM_MODELS",
+            Some(" runpod-qwen36, gemma4:e2b "),
+        );
+        let _intent = EnvVarGuard::set("NOTCLAUDE_SWARM_INTENT_MODEL", None);
+        let _planner = EnvVarGuard::set("NOTCLAUDE_SWARM_PLANNER_MODEL", None);
+        let _coder = EnvVarGuard::set("NOTCLAUDE_SWARM_CODER_MODEL", None);
+        let _reviewer = EnvVarGuard::set("NOTCLAUDE_SWARM_REVIEWER_MODEL", None);
+
+        let config = RoleConfig::from_env();
+
+        assert_eq!(config.intent_model, "gpt-5.5");
+        assert_eq!(config.planner_model, "gpt-5.5");
+        assert_eq!(config.reviewer_model, "gpt-5.5");
+        assert_eq!(config.coder_model, "runpod-qwen36");
+    }
+
+    #[test]
+    fn from_env_role_specific_overrides_win() {
+        let _lock = env_lock();
+        let _orchestrator = EnvVarGuard::set("NOTCLAUDE_SWARM_ORCHESTRATOR", Some("gpt-5.5"));
+        let _workers = EnvVarGuard::set("NOTCLAUDE_SWARM_MODELS", Some("runpod-qwen36"));
+        let _intent = EnvVarGuard::set("NOTCLAUDE_SWARM_INTENT_MODEL", Some("intent-model"));
+        let _planner = EnvVarGuard::set("NOTCLAUDE_SWARM_PLANNER_MODEL", Some("planner-model"));
+        let _coder = EnvVarGuard::set("NOTCLAUDE_SWARM_CODER_MODEL", Some("coder-model"));
+        let _reviewer = EnvVarGuard::set("NOTCLAUDE_SWARM_REVIEWER_MODEL", Some("reviewer-model"));
+
+        let config = RoleConfig::from_env();
+
+        assert_eq!(config.intent_model, "intent-model");
+        assert_eq!(config.planner_model, "planner-model");
+        assert_eq!(config.coder_model, "coder-model");
+        assert_eq!(config.reviewer_model, "reviewer-model");
+    }
+}

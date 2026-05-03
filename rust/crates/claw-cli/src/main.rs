@@ -5111,7 +5111,7 @@ mod tests {
         describe_tool_progress, filter_tool_specs, format_compact_report, format_cost_report,
         format_internal_prompt_progress_line, format_model_report, format_model_switch_report,
         format_permissions_report, format_permissions_switch_report, format_resume_report,
-        format_status_report, format_tool_call_start, format_tool_result,
+        format_status_report, format_tool_call_start, format_tool_result, is_swarm_model,
         normalize_permission_mode, parse_args, parse_git_status_metadata, permission_policy,
         print_help_to, push_output_block, render_config_report, render_memory_report,
         render_repl_help, render_unknown_repl_command, resolve_model_alias, response_to_events,
@@ -5124,6 +5124,7 @@ mod tests {
     use runtime::{AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PermissionMode};
     use serde_json::json;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
     use tools::GlobalToolRegistry;
 
@@ -5149,6 +5150,38 @@ mod tests {
             None,
         )])
         .expect("plugin tool registry should build")
+    }
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock poisoned")
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
     }
 
     #[test]
@@ -5283,6 +5316,18 @@ mod tests {
         assert_eq!(resolve_model_alias("notclaude-coinflip"), "swarm");
         assert_eq!(resolve_model_alias("qwen36"), "Qwen/Qwen3.6-35B-A3B-FP8");
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
+    }
+
+    #[test]
+    fn swarm_env_flag_does_not_mark_worker_models_as_swarm() {
+        let _lock = env_lock();
+        let _swarm = EnvVarGuard::set("NOTCLAUDE_SWARM", Some("1"));
+
+        assert!(is_swarm_model("swarm"));
+        assert!(is_swarm_model("coinflip"));
+        assert!(!is_swarm_model("gpt-5.5"));
+        assert!(!is_swarm_model("Qwen/Qwen3.6-35B-A3B-FP8"));
+        assert!(!is_swarm_model("gemma4:e2b"));
     }
 
     #[test]

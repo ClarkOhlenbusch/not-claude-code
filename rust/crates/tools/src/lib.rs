@@ -3100,7 +3100,7 @@ mod tests {
         assert!(names.contains(&"ToolSearch"));
         assert!(names.contains(&"NotebookEdit"));
         assert!(names.contains(&"Sleep"));
-        assert!(names.contains(&"SendUserMessage"));
+        assert!(!names.contains(&"SendUserMessage"));
         assert!(names.contains(&"Config"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
@@ -3444,6 +3444,21 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = temp_path("skill-home");
+        let codex_home = root.join("codex");
+        let skill_root = codex_home.join("skills").join("help");
+        std::fs::create_dir_all(&skill_root).expect("skill dir");
+        std::fs::write(
+            skill_root.join("SKILL.md"),
+            "---\ndescription: Test help skill\n---\nGuide on using oh-my-codex plugin\n",
+        )
+        .expect("write skill");
+
+        let original_codex_home = std::env::var("CODEX_HOME").ok();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("CODEX_HOME", &codex_home);
+        std::env::set_var("HOME", root.join("home"));
+
         let result = execute_tool(
             "Skill",
             &json!({
@@ -3478,6 +3493,16 @@ mod tests {
             .as_str()
             .expect("path")
             .ends_with("/help/SKILL.md"));
+
+        match original_codex_home {
+            Some(value) => std::env::set_var("CODEX_HOME", value),
+            None => std::env::remove_var("CODEX_HOME"),
+        }
+        match original_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3539,7 +3564,6 @@ mod tests {
             },
         )
         .expect("Agent should succeed");
-        std::env::remove_var("CLAW_AGENT_STORE");
 
         assert_eq!(manifest.name, "ship-audit");
         assert_eq!(manifest.subagent_type.as_deref(), Some("Explore"));
@@ -3587,6 +3611,7 @@ mod tests {
         .expect("Agent should normalize explicit names");
         let named_output: serde_json::Value = serde_json::from_str(&named).expect("valid json");
         assert_eq!(named_output["name"], "ship-audit");
+        std::env::remove_var("CLAW_AGENT_STORE");
         let _ = std::fs::remove_dir_all(dir);
     }
 

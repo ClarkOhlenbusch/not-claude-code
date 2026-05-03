@@ -146,7 +146,10 @@ impl ApiClient for OrchestratorRuntime {
         let coder_done = !events
             .iter()
             .any(|e| matches!(e, AssistantEvent::ToolUse { .. }));
-        if coder_done && self.state.retries_used < MAX_RETRIES_PER_TURN {
+        if coder_done
+            && !request_has_tool_result(&augmented_request)
+            && self.state.retries_used < MAX_RETRIES_PER_TURN
+        {
             if let Some(spec) = self.state.spec.clone() {
                 let summary = summarize_events(&events);
                 let outcome = reviewer::review(&self.roles, &spec, &summary);
@@ -167,7 +170,6 @@ impl ApiClient for OrchestratorRuntime {
             }
         }
 
-        prepend_role_banner("coder", &mut events);
         Ok(events)
     }
 }
@@ -190,6 +192,15 @@ fn hash_str(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
     s.hash(&mut h);
     h.finish()
+}
+
+fn request_has_tool_result(request: &ApiRequest) -> bool {
+    request.messages.iter().any(|message| {
+        message
+            .blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+    })
 }
 
 /// Build a short summary of what the coder did, suitable for the reviewer.
@@ -270,8 +281,59 @@ mod tests {
                 messages: vec![],
             })
             .unwrap();
-        // Banner + the 1 inner event
-        assert_eq!(events.len(), 2);
+        assert_eq!(events, vec![AssistantEvent::TextDelta("hi".into())]);
+    }
+
+    #[test]
+    fn active_mode_does_not_inject_text_before_tool_use() {
+        let tool_event = AssistantEvent::ToolUse {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            input: "{}".into(),
+        };
+        let inner =
+            ScriptedClient::new(vec![vec![tool_event.clone(), AssistantEvent::MessageStop]]);
+        let mut rt =
+            OrchestratorRuntime::with_orchestration_enabled(Box::new(inner), RoleConfig::default());
+
+        let events = rt
+            .stream(ApiRequest {
+                system_prompt: vec![],
+                messages: vec![],
+            })
+            .unwrap();
+
+        assert_eq!(events.first(), Some(&tool_event));
+    }
+
+    #[test]
+    fn active_mode_skips_reviewer_after_tool_result_turns() {
+        let inner = ScriptedClient::new(vec![vec![
+            AssistantEvent::TextDelta("done".into()),
+            AssistantEvent::MessageStop,
+        ]]);
+        let mut rt =
+            OrchestratorRuntime::with_orchestration_enabled(Box::new(inner), RoleConfig::default());
+
+        let events = rt
+            .stream(ApiRequest {
+                system_prompt: vec![],
+                messages: vec![ConversationMessage::tool_result(
+                    "call-1",
+                    "write_file",
+                    "ok",
+                    false,
+                )],
+            })
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                AssistantEvent::TextDelta("done".into()),
+                AssistantEvent::MessageStop
+            ]
+        );
     }
 
     #[test]
