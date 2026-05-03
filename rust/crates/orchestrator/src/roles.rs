@@ -8,6 +8,8 @@
 //! proven `qwen2.5-coder:14b` so a Phase-1 swarm run produces the same
 //! pass rate as the single-model baseline.
 
+use std::env;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleConfig {
     /// Tiny conversational model that classifies user intent.
@@ -41,6 +43,56 @@ impl Default for RoleConfig {
 }
 
 impl RoleConfig {
+    /// Build role config from environment overrides, falling back to the
+    /// default single-model baseline. The `NOTCLAUDE_SWARM_*` names match the
+    /// launcher-era swarm path so existing coinflip invocations keep working.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let mut config = Self::default();
+
+        if let Ok(model) = env::var("NOTCLAUDE_SWARM_ORCHESTRATOR") {
+            if !model.trim().is_empty() {
+                let model = model.trim().to_string();
+                config.intent_model = model.clone();
+                config.planner_model = model.clone();
+                config.reviewer_model = model;
+            }
+        }
+
+        if let Some(model) = env::var("NOTCLAUDE_SWARM_MODELS").ok().and_then(|models| {
+            models
+                .split(',')
+                .map(str::trim)
+                .find(|model| !model.is_empty())
+                .map(str::to_string)
+        }) {
+            config.coder_model = model;
+        }
+
+        if let Ok(model) = env::var("NOTCLAUDE_SWARM_INTENT_MODEL") {
+            if !model.trim().is_empty() {
+                config.intent_model = model.trim().to_string();
+            }
+        }
+        if let Ok(model) = env::var("NOTCLAUDE_SWARM_PLANNER_MODEL") {
+            if !model.trim().is_empty() {
+                config.planner_model = model.trim().to_string();
+            }
+        }
+        if let Ok(model) = env::var("NOTCLAUDE_SWARM_CODER_MODEL") {
+            if !model.trim().is_empty() {
+                config.coder_model = model.trim().to_string();
+            }
+        }
+        if let Ok(model) = env::var("NOTCLAUDE_SWARM_REVIEWER_MODEL") {
+            if !model.trim().is_empty() {
+                config.reviewer_model = model.trim().to_string();
+            }
+        }
+
+        config
+    }
+
     /// Configuration matching the user's design choice (3 distinct models).
     /// Enable explicitly for the Phase 6 bake-off; not the Phase 1 default.
     #[must_use]

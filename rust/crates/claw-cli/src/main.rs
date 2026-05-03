@@ -3204,10 +3204,15 @@ fn build_runtime(
     // around a single inner DefaultRuntimeClient. Phase 3+ will replace the
     // single inner with role-specific calls.
     let is_swarm = matches!(model.as_str(), "swarm" | "notclaude-swarm");
+    let swarm_roles = is_swarm.then(orchestrator::RoleConfig::from_env);
     let coder_model = if is_swarm {
-        // Pull from RoleConfig::default() so updates to the swarm's coder
-        // model live in one place (orchestrator/src/roles.rs).
-        orchestrator::RoleConfig::default().coder_model
+        // Pull from RoleConfig so updates to the swarm's coder model live in
+        // one place, while still honoring launcher/env overrides.
+        swarm_roles
+            .as_ref()
+            .expect("swarm roles should exist")
+            .coder_model
+            .clone()
     } else {
         model.clone()
     };
@@ -3227,7 +3232,7 @@ fn build_runtime(
         Box::new(
             orchestrator::OrchestratorRuntime::with_orchestration_enabled(
                 Box::new(inner_client),
-                orchestrator::RoleConfig::default(),
+                swarm_roles.expect("swarm roles should exist"),
             ),
         )
     } else {
