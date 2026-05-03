@@ -1010,12 +1010,21 @@ fn run_repl(
     permission_mode: PermissionMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cli = LiveCli::new(model, true, allowed_tools, permission_mode)?;
-    let mut editor = input::LineEditor::new("> ", slash_command_completion_candidates());
+    let color = io::stdout().is_terminal();
+    // Orange ❯ prompt to match Claude Code's input glyph.
+    let prompt = if color {
+        "\x1b[38;2;217;119;87m❯\x1b[0m "
+    } else {
+        "❯ "
+    };
+    let mut editor = input::LineEditor::new(prompt, slash_command_completion_candidates());
     println!("{}", cli.startup_banner());
 
     loop {
+        print_input_frame_top(color);
         match editor.read_line()? {
             input::ReadOutcome::Submit(input) => {
+                print_input_frame_bottom(color, &cli);
                 let trimmed = input.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -1033,7 +1042,9 @@ fn run_repl(
                 editor.push_history(&input);
                 cli.run_turn(&input)?;
             }
-            input::ReadOutcome::Cancel => {}
+            input::ReadOutcome::Cancel => {
+                print_input_frame_bottom(color, &cli);
+            }
             input::ReadOutcome::Exit => {
                 cli.persist_session()?;
                 break;
@@ -1042,6 +1053,41 @@ fn run_repl(
     }
 
     Ok(())
+}
+
+/// Horizontal rule above the input prompt — matches Claude Code's input frame.
+fn print_input_frame_top(color: bool) {
+    let term_width = crossterm::terminal::size()
+        .map(|(cols, _)| cols as usize)
+        .unwrap_or(100)
+        .clamp(40, 200);
+    let dim_open = if color { "\x1b[2m" } else { "" };
+    let dim_close = if color { "\x1b[0m" } else { "" };
+    println!("{dim_open}{}{dim_close}", "─".repeat(term_width));
+}
+
+/// Horizontal rule + hint line below the input prompt.
+fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
+    let term_width = crossterm::terminal::size()
+        .map(|(cols, _)| cols as usize)
+        .unwrap_or(100)
+        .clamp(40, 200);
+    let dim_open = if color { "\x1b[2m" } else { "" };
+    let dim_close = if color { "\x1b[0m" } else { "" };
+    let orange_dot = if color { "\x1b[38;2;217;119;87m●\x1b[0m" } else { "●" };
+    println!("{dim_open}{}{dim_close}", "─".repeat(term_width));
+
+    let left = "? for shortcuts";
+    let right = format!("{orange_dot} {dim_open}{}{dim_close}", cli.model);
+    let left_visible = visible_width(left);
+    let right_visible = visible_width(&right);
+    let pad = term_width
+        .saturating_sub(left_visible + right_visible + 4);
+    println!(
+        "{dim_open}  {left}{}{}{dim_close}",
+        " ".repeat(pad),
+        right,
+    );
 }
 
 #[derive(Debug, Clone)]
