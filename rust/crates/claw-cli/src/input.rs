@@ -223,11 +223,34 @@ impl EditSession {
         let cursor_row = cursor_prefix.bytes().filter(|byte| *byte == b'\n').count();
         let cursor_col = match cursor_prefix.rsplit_once('\n') {
             Some((_, suffix)) => suffix.chars().count(),
-            None => prompt.chars().count() + cursor_prefix.chars().count(),
+            None => visible_prompt_width(prompt) + cursor_prefix.chars().count(),
         };
         let total_lines = active_text.bytes().filter(|byte| *byte == b'\n').count() + 1;
         (cursor_row, cursor_col, total_lines)
     }
+}
+
+/// Visible width of a prompt string, skipping ANSI escape sequences.
+/// Without this, embedded color codes (e.g. `\x1b[38;2;...m❯\x1b[0m `) would
+/// be counted as visible chars and the cursor would land far past where the
+/// user's typing actually appears.
+fn visible_prompt_width(s: &str) -> usize {
+    let mut count = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        count += 1;
+    }
+    count
 }
 
 enum KeyAction {
