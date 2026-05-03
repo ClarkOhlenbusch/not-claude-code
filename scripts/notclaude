@@ -17,7 +17,7 @@ if [ ! -x "$CLAW_BIN" ]; then
   exit 1
 fi
 
-DEFAULT_MODEL="qwen2.5-coder:14b"
+DEFAULT_MODEL="swarm"
 OLLAMA_URL="http://localhost:11434"
 
 # Start Ollama if not running. Silent unless we have to spin it up.
@@ -49,10 +49,15 @@ for arg in "$@"; do
 done
 
 if [ "$HAS_MODEL_FLAG" -eq 0 ]; then
-  if ! curl -sf "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "\"$DEFAULT_MODEL\""; then
-    echo "notclaude: default model $DEFAULT_MODEL not pulled" >&2
-    echo "  pull it with: ollama pull $DEFAULT_MODEL" >&2
-    exit 1
+  # Skip the Ollama-tag pull check for the 'swarm' pseudo-model — it's
+  # not a real Ollama model, it's the orchestrator runtime that
+  # internally dispatches to whatever models RoleConfig configures.
+  if [ "$DEFAULT_MODEL" != "swarm" ] && [ "$DEFAULT_MODEL" != "notclaude-swarm" ]; then
+    if ! curl -sf "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "\"$DEFAULT_MODEL\""; then
+      echo "notclaude: default model $DEFAULT_MODEL not pulled" >&2
+      echo "  pull it with: ollama pull $DEFAULT_MODEL" >&2
+      exit 1
+    fi
   fi
   set -- --model "$DEFAULT_MODEL" "$@"
 fi

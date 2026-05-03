@@ -20,9 +20,22 @@ pub struct PickerEntry {
 pub enum EntryKind {
     Cloud,
     Ollama,
+    /// Multi-model orchestrator (intent → planner → coder → reviewer + retry).
+    /// Not a single model — selects the OrchestratorRuntime path. Routes
+    /// individual role calls through whatever Ollama models are configured
+    /// in `RoleConfig`.
+    Swarm,
 }
 
 const STATIC_ENTRIES: &[PickerEntry] = &[
+    // Default — the orchestrator (intent → planner → coder → reviewer).
+    // Listed first so it appears at the top of the picker.
+    PickerEntry {
+        alias: "swarm",
+        canonical: "swarm",
+        kind: EntryKind::Swarm,
+        estimated_gb: None,
+    },
     PickerEntry {
         alias: "opus",
         canonical: "claude-opus-4-6",
@@ -86,6 +99,9 @@ pub enum EntryStatus {
     Cloud,
     Ready { size_bytes: u64 },
     NotPulled { estimated_gb: Option<f32> },
+    /// Always available — the swarm path doesn't pull a model itself,
+    /// it dispatches to whatever the configured roles use.
+    Swarm,
 }
 
 pub fn build_entries(installed: &[ollama::InstalledModel]) -> Vec<ResolvedEntry> {
@@ -93,6 +109,7 @@ pub fn build_entries(installed: &[ollama::InstalledModel]) -> Vec<ResolvedEntry>
     for entry in STATIC_ENTRIES {
         let status = match entry.kind {
             EntryKind::Cloud => EntryStatus::Cloud,
+            EntryKind::Swarm => EntryStatus::Swarm,
             EntryKind::Ollama => installed
                 .iter()
                 .find(|m| m.name == entry.canonical)
@@ -300,6 +317,7 @@ fn render(
                     EntryStatus::Ready { .. } => Color::Green,
                     EntryStatus::NotPulled { .. } => Color::DarkYellow,
                     EntryStatus::Cloud => Color::Cyan,
+                    EntryStatus::Swarm => Color::Magenta,
                 };
                 if is_selected {
                     queue!(
@@ -351,6 +369,7 @@ fn clear_render(stdout: &mut io::Stdout, rows: &[Row]) -> io::Result<()> {
 fn render_status(status: &EntryStatus) -> String {
     match status {
         EntryStatus::Cloud => "cloud".to_string(),
+        EntryStatus::Swarm => "orchestrator · plan→code→review".to_string(),
         EntryStatus::Ready { size_bytes } => {
             format!("ready · {}", ollama::format_bytes(*size_bytes))
         }
