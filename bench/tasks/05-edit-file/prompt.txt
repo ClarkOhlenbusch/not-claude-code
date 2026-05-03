@@ -1,0 +1,1 @@
+Edit /tmp/notclaude-bench-05.txt — change the word "before" to the word "after". Use the edit_file tool.

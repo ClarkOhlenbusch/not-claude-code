@@ -1,0 +1,1 @@
+Create the file /tmp/notclaude-bench-03.txt containing exactly the line: BENCH_MARKER_03_HELLO

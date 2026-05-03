@@ -1,0 +1,1 @@
+Read the file /tmp/notclaude-bench-04.txt and tell me the marker word it contains.

@@ -1,0 +1,1 @@
+Use grep_search to find the word "BENCH_MARKER_GREP" inside /tmp/notclaude-bench-grep/ and tell me which file contains it.

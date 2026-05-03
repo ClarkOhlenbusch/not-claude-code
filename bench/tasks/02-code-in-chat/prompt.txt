@@ -1,0 +1,1 @@
+Write a Python function called fibonacci(n) that returns the nth Fibonacci number. Just show me the code in your reply — do not save to any file.

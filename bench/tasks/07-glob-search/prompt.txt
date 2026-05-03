@@ -1,0 +1,1 @@
+Use glob_search to find all files matching the pattern /tmp/notclaude-bench-glob-*.txt and tell me how many were found.

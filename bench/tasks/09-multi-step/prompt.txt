@@ -1,0 +1,1 @@
+Write the file /tmp/notclaude-bench-09.py containing a Python program that prints exactly the line "BENCH_MARKER_09_OWL". Then run it with bash (python3 /tmp/notclaude-bench-09.py) and tell me what it printed.
