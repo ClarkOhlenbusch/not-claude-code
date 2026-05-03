@@ -24,3 +24,6 @@ Cargo.lock.bk
 .models/
 *.gguf
 index.html
+
+# Legacy paths (pre-rebrand)
+**/.claw/
