@@ -1385,8 +1385,10 @@ impl LiveCli {
         let result = self.runtime.run_turn(input, Some(&mut permission_prompter));
         match result {
             Ok(_) => {
-                // Silent finish — no "done" message, just clear the spinner.
-                spinner.finish("", TerminalRenderer::new().color_theme(), &mut stdout)?;
+                // The response stream may end on the current terminal line.
+                // Clearing the spinner here would erase short one-line answers.
+                writeln!(stdout)?;
+                stdout.flush()?;
                 self.persist_session()?;
                 Ok(())
             }
