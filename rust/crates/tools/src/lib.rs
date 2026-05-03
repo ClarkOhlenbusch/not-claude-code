@@ -456,27 +456,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::ReadOnly,
         },
-        ToolSpec {
-            name: "SendUserMessage",
-            description: "Send a message to the user.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "message": { "type": "string" },
-                    "attachments": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["normal", "proactive"]
-                    }
-                },
-                "required": ["message", "status"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
+        // Removed: SendUserMessage. Claude Code doesn't expose this tool.
+        // The model should reply with plain text, which the host renders as
+        // the assistant turn. With this tool registered, small models like
+        // Qwen consistently mis-pick it for normal replies and end up
+        // "thanking themselves" for the response. The dispatch handler still
+        // exists for "Brief" (the underlying proactive-message tool) so future
+        // proactive features can use it without re-introducing the confusion.
         ToolSpec {
             name: "Config",
             description: "Get or set NOT Claude Code settings.",

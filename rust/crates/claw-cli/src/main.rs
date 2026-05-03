@@ -414,11 +414,34 @@ fn default_permission_mode() -> PermissionMode {
         .map_or(PermissionMode::DangerFullAccess, permission_mode_from_label)
 }
 
+/// Tools that ship in the registry but that we don't expose to the model
+/// over the wire. Small local models grab any tool they see — exposing
+/// internal/legacy/host-only tools (Config, Sleep, REPL, etc.) makes them
+/// pick the wrong one for normal queries (e.g. using Config for "tell me
+/// something interesting"). Keep this list to host-only tools that exist
+/// for dispatch but aren't a model-facing capability.
+const MODEL_HIDDEN_TOOLS: &[&str] = &[
+    "Config",
+    "Sleep",
+    "REPL",
+    "PowerShell",
+    "NotebookEdit",
+    "StructuredOutput",
+    "Skill",
+    "ToolSearch",
+    "Agent",
+    "TodoWrite",
+];
+
 fn filter_tool_specs(
     tool_registry: &GlobalToolRegistry,
     allowed_tools: Option<&AllowedToolSet>,
 ) -> Vec<ToolDefinition> {
-    tool_registry.definitions(allowed_tools)
+    tool_registry
+        .definitions(allowed_tools)
+        .into_iter()
+        .filter(|tool| !MODEL_HIDDEN_TOOLS.contains(&tool.name.as_str()))
+        .collect()
 }
 
 fn parse_system_prompt_args(args: &[String]) -> Result<CliAction, String> {
