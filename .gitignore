@@ -15,6 +15,10 @@ Cargo.lock.bk
 .claude/settings.local.json
 .claude/sessions/
 
+# Claw local artifacts
+.claw/sessions/
+.claw/credentials.json
+
 # Local model artifacts (cache, etc.)
 .models/
 *.gguf
