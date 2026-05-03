@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fs;
 use std::sync::Arc;
 use std::sync::{Mutex as StdMutex, OnceLock};
 
@@ -232,6 +233,72 @@ async fn provider_client_dispatches_xai_requests_from_env() {
     );
 }
 
+#[tokio::test]
+async fn provider_client_dispatches_openai_requests_from_codex_oauth() {
+    let _lock = env_lock();
+    let _api_key = ScopedEnvVar::unset("OPENAI_API_KEY");
+
+    let auth_path = std::env::temp_dir().join(format!(
+        "notclaude-codex-oauth-integration-{}.json",
+        std::process::id()
+    ));
+    fs::write(
+        &auth_path,
+        r#"{"auth_mode":"chatgpt","OPENAI_API_KEY":null,"tokens":{"access_token":"codex-access-token","refresh_token":"codex-refresh-token","account_id":"acct-test"}}"#,
+    )
+    .expect("write auth fixture");
+    let _auth_file = ScopedEnvVar::set("CODEX_AUTH_FILE", auth_path.as_os_str());
+
+    let state = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let sse = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-5.5\"}}\n\n",
+        "event: response.output_text.delta\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Through Codex OAuth\"}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":9,\"output_tokens\":4}}}\n\n",
+    );
+    let server = spawn_server(
+        state.clone(),
+        vec![http_response_with_headers(
+            "200 OK",
+            "text/event-stream",
+            sse,
+            &[("x-request-id", "req_codex_oauth")],
+        )],
+    )
+    .await;
+    let _base_url = ScopedEnvVar::set("CODEX_RESPONSES_BASE_URL", server.base_url());
+
+    let client = ProviderClient::from_model("gpt-5.5")
+        .expect("OpenAI provider should load Codex OAuth credentials");
+    assert!(matches!(client, ProviderClient::OpenAi(_)));
+
+    let response = client
+        .send_message(&sample_request(false))
+        .await
+        .expect("provider-dispatched request should succeed");
+
+    assert_eq!(response.total_tokens(), 13);
+
+    let captured = state.lock().await;
+    let request = captured.first().expect("captured request");
+    assert_eq!(request.path, "/responses");
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer codex-access-token")
+    );
+    assert_eq!(
+        request
+            .headers
+            .get("chatgpt-account-id")
+            .map(String::as_str),
+        Some("acct-test")
+    );
+
+    let _ = fs::remove_file(auth_path);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CapturedRequest {
     path: String,
@@ -401,6 +468,12 @@ impl ScopedEnvVar {
     fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
         let previous = std::env::var_os(key);
         std::env::set_var(key, value);
+        Self { key, previous }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::remove_var(key);
         Self { key, previous }
     }
 }

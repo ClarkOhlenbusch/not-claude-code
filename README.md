@@ -21,28 +21,73 @@ A local-first coding agent that looks and feels like Claude Code, but runs entir
 
 ## Quick start
 
-Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~10 GB free disk.
+Prereqs: Rust 1.90+, Ollama (`brew install ollama`), and either a Compute Community key or the small local `gemma4:e2b` model.
 
 ```bash
 git clone https://github.com/ClarkOhlenbusch/not-claude-code
 cd not-claude-code
 
-# Build optimized binary (~16s first time, ~3s incremental)
-(cd rust && cargo build --release)
+# Install the wrapper commands (notclaude and notclaude-coinflip)
+./scripts/install-notclaude
 
-# Install the wrapper command (creates ~/.local/bin/notclaude → scripts/notclaude)
-mkdir -p ~/.local/bin && ln -sf "$PWD/scripts/notclaude" ~/.local/bin/notclaude
-
-# Pull the recommended model (~9 GB, one-time)
-ollama pull qwen2.5-coder:14b
-
-# Use it (Ollama auto-starts if not already running)
+# Use it. First launch auto-builds the Rust binary if missing. By default,
+# notclaude uses Compute Qwen 3.6 when a key is present, otherwise gemma4:e2b.
 notclaude "say hi"                     # one-shot prompt
 notclaude                              # interactive REPL
-notclaude --model qwen2.5-coder:7b "…" # smaller / faster (less reliable for agentic tasks)
+notclaude-coinflip                     # interactive REPL with coinflip/swarm orchestration
+notclaude --model qwen36 "…"           # force Compute Qwen 3.6
 ```
 
-Make sure `~/.local/bin` is on your `$PATH`. The wrapper sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL=http://localhost:11434/v1`, and defaults `--model` to `qwen2.5-coder:14b`.
+The installer puts `~/.local/bin` on your shell path when needed. The wrapper builds `rust/target/release/notclaude` only when the binary is missing, or when `NOTCLAUDE_AUTO_BUILD=1` is set. For normal launches, it defaults `--model` to `qwen36` when `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` is set; otherwise it uses local `gemma4:e2b`. It also installs `notclaude-coinflip`, which launches the same CLI with `NOTCLAUDE_SWARM=1` and `--model coinflip` unless you override it.
+
+### Coinflip launcher
+
+`notclaude-coinflip` is the dedicated entry point for the project orchestration logic. It uses the existing swarm path in the Rust CLI: GPT-5.5 distills and evaluates, then local/remote worker models attempt the task. The launcher configures Ollama for worker models while leaving your real `OPENAI_API_KEY` available for the orchestrator. Tune the lineup with env vars:
+
+```bash
+notclaude-coinflip
+notclaude-coinflip run "inspect this repo and propose the next benchmark"
+NOTCLAUDE_SWARM_ORCHESTRATOR=gpt-5.5 NOTCLAUDE_SWARM_MODELS=runpod-qwen36,gemma4:e2b notclaude-coinflip
+NOTCLAUDE_COINFLIP_MODEL=swarm notclaude-coinflip
+```
+
+### Remote Ollama compute
+
+Point the launcher at another machine running Ollama with `NOTCLAUDE_OLLAMA_URL`. The CLI still behaves the same locally; only model inference moves to that endpoint.
+
+```bash
+export NOTCLAUDE_OLLAMA_URL="http://other-compute-host:11434"
+notclaude --model qwen-coder
+notclaude --model qwen3-coder:30b "summarize this repo"
+```
+
+`qwen-coder` is an alias for `qwen3-coder:30b`. You can set `NOTCLAUDE_DEFAULT_MODEL=qwen-coder` if you want the remote Qwen model to be the default.
+
+### Runpod Qwen3.6 35B
+
+The Compute Community Runpod model is wired as an OpenAI-compatible endpoint:
+
+```bash
+export COMPUTECOMMUNITY_API_KEY="cc_your_api_key"
+notclaude --model qwen36
+notclaude --model qwen3.6 "summarize this repo"
+```
+
+Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. Use `CC_API_KEY` instead of `COMPUTECOMMUNITY_API_KEY` if you prefer the shorter env var.
+
+## Scriptable command-line runs
+
+Use `notclaude run` when you want this agent in a shell script, Makefile, CI-ish local loop, or editor command. It builds the same workspace-aware runtime as the REPL, so project instructions, `.notclaude` config, tools, permissions, and the current working directory all stay connected.
+
+```bash
+notclaude run "summarize the current diff and suggest tests"
+notclaude run --cwd /path/to/repo "fix the failing unit tests"
+git diff --stat | notclaude run "turn this into a PR summary"
+printf '%s\n' "inspect this repo and make the smallest safe fix" | notclaude run --cwd "$PWD"
+notclaude --output-format json run "list the tool calls you used"
+```
+
+`run` reads the prompt from arguments, from `-`, or from piped stdin when no prompt is provided. `--cwd` changes into the target project before runtime setup, which is the important bit when calling it from outside the repo.
 
 ## What works at each model size
 
@@ -99,17 +144,16 @@ See `crates/api/src/providers/openai_compat.rs` `handle_text_delta` and `extract
 
 ## Hardware target
 
-Reference: MacBook Pro M4 Pro, 24 GB unified memory. Practical model lineup at Q4 quantization:
+Practical model lineup:
 
 | Model | Footprint | Use |
 |---|---|---|
-| `qwen2.5-coder:14b` | ~9 GB | recommended default — handles agentic tasks reliably |
-| `qwen2.5-coder:7b` | ~4.5 GB | faster, lower quality, fine for simple chat |
-| `qwen2.5-coder:3b` | ~2 GB | future router/classifier role |
+| `qwen36` / `runpod-qwen36` | remote | preferred agentic default when a compute key is available |
+| `gemma4:e2b` | ~7 GB | local fallback for Intel Macs and quick offline checks |
+| `qwen2.5-coder:14b` | ~9 GB | too slow for Intel Macs; use only on faster Apple Silicon or remote Ollama |
 | `nomic-embed-text:v1.5` | ~250 MB | future repo retrieval |
-| `deepseek-coder-v2:16b` (MoE) | ~10 GB | A/B baseline for the swarm thesis |
 
-M4 Pro memory bandwidth is ~273 GB/s, shared between concurrent inferences — keep models loaded but only run 1–2 at a time.
+On Intel Macs, avoid 14B local models for interactive use. Prefer Compute Qwen 3.6, or keep local testing to `gemma4:e2b`.
 
 ## Future architecture (the project's thesis)
 

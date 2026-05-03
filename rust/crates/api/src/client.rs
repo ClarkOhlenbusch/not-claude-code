@@ -24,6 +24,7 @@ pub enum ProviderClient {
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
     Ollama(OpenAiCompatClient),
+    ComputeCommunity(OpenAiCompatClient),
 }
 
 impl ProviderClient {
@@ -50,6 +51,9 @@ impl ProviderClient {
             ProviderKind::Ollama => Ok(Self::Ollama(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::ollama(),
             )?)),
+            ProviderKind::ComputeCommunity => Ok(Self::ComputeCommunity(
+                OpenAiCompatClient::from_env(OpenAiCompatConfig::compute_community_qwen())?,
+            )),
         }
     }
 
@@ -60,6 +64,7 @@ impl ProviderClient {
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
             Self::Ollama(_) => ProviderKind::Ollama,
+            Self::ComputeCommunity(_) => ProviderKind::ComputeCommunity,
         }
     }
 
@@ -69,9 +74,10 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::ClawApi(client) => send_via_provider(client, request).await,
-            Self::Xai(client) | Self::OpenAi(client) | Self::Ollama(client) => {
-                send_via_provider(client, request).await
-            }
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::Ollama(client)
+            | Self::ComputeCommunity(client) => send_via_provider(client, request).await,
         }
     }
 
@@ -83,11 +89,12 @@ impl ProviderClient {
             Self::ClawApi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::ClawApi),
-            Self::Xai(client) | Self::OpenAi(client) | Self::Ollama(client) => {
-                stream_via_provider(client, request)
-                    .await
-                    .map(MessageStream::OpenAiCompat)
-            }
+            Self::Xai(client)
+            | Self::OpenAi(client)
+            | Self::Ollama(client)
+            | Self::ComputeCommunity(client) => stream_via_provider(client, request)
+                .await
+                .map(MessageStream::OpenAiCompat),
         }
     }
 }
@@ -126,6 +133,11 @@ pub fn read_base_url() -> String {
 #[must_use]
 pub fn read_xai_base_url() -> String {
     openai_compat::read_base_url(OpenAiCompatConfig::xai())
+}
+
+#[must_use]
+pub fn read_compute_community_qwen_base_url() -> String {
+    openai_compat::read_base_url(OpenAiCompatConfig::compute_community_qwen())
 }
 
 #[cfg(test)]
