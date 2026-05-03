@@ -72,13 +72,13 @@ notclaude-coinflip run "inspect this repo and propose the next benchmark"
 NOTCLAUDE_COINFLIP_MODEL=swarm notclaude-coinflip
 ```
 
-On first launch, `notclaude-coinflip` runs a one-time Compute Community setup if no saved key is found. It stores the key at `~/.notclaude/coinflip.env` with `0600` permissions, then future launches are just:
+`notclaude-coinflip` does not run interactive setup during startup. Compute credentials must be provisioned before launch through the environment or `~/.notclaude/coinflip.env`, then normal usage is just:
 
 ```bash
 notclaude-coinflip
 ```
 
-The default coinflip lineup is GPT-5.5 as orchestrator and `runpod-qwen36` as the compute worker. To intentionally bypass compute and run GPT-only fallback:
+The default coinflip lineup is GPT-5.5 as orchestrator and `runpod-qwen36` as the compute worker. If compute credentials are missing, the launcher fails clearly instead of silently using GPT-only. To intentionally bypass compute and run GPT-only fallback:
 
 ```bash
 NOTCLAUDE_COINFLIP_ALLOW_GPT_FALLBACK=1 notclaude-coinflip
@@ -106,7 +106,7 @@ notclaude --model qwen36
 notclaude --model qwen3.6 "summarize this repo"
 ```
 
-Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. `notclaude-coinflip` reads `~/.notclaude/coinflip.env` automatically, so direct Qwen runs work after the same one-time setup. You can still use `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` if you want to override the saved key for a single shell.
+Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. `notclaude-coinflip` reads `~/.notclaude/coinflip.env` automatically, and you can still use `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` if you want to override the saved key for a single shell.
 
 ## Scriptable command-line runs
 
