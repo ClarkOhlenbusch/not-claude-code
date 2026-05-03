@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Clone, Parser, PartialEq, Eq)]
-#[command(name = "claw-cli", version, about = "Claw Code CLI")]
+#[command(name = "notclaude", version, about = "NOT Claude Code — local-first coding agent")]
 pub struct Cli {
     #[arg(long, default_value = "claude-opus-4-6")]
     pub model: String,

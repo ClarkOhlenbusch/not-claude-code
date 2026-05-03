@@ -1124,9 +1124,9 @@ impl LiveCli {
             format!(
                 "{} {}",
                 if color {
-                    "\x1b[1;38;5;45m🦞 Claw Code\x1b[0m"
+                    "\x1b[38;2;217;119;87m✻\x1b[0m \x1b[1;38;2;185;28;28mNOT\x1b[0m \x1b[1;38;2;217;119;87mClaude Code\x1b[0m"
                 } else {
-                    "Claw Code"
+                    "✻ NOT Claude Code"
                 },
                 if color {
                     "\x1b[2m· ready\x1b[0m"
@@ -1164,7 +1164,7 @@ impl LiveCli {
         let mut spinner = Spinner::new();
         let mut stdout = io::stdout();
         spinner.tick(
-            "🦀 Thinking...",
+            "✻ Thinking...",
             TerminalRenderer::new().color_theme(),
             &mut stdout,
         )?;
@@ -2488,7 +2488,7 @@ fn render_version_report() -> String {
     let git_sha = GIT_SHA.unwrap_or("unknown");
     let target = BUILD_TARGET.unwrap_or("unknown");
     format!(
-        "Claw Code\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}\n\nSupport\n  Help             claw --help\n  REPL             /help"
+        "NOT Claude Code\n  Version          {VERSION}\n  Git SHA          {git_sha}\n  Target           {target}\n  Build date       {DEFAULT_DATE}\n\nSupport\n  Help             notclaude --help\n  REPL             /help"
     )
 }
 
@@ -3964,28 +3964,37 @@ fn convert_messages(messages: &[ConversationMessage]) -> Vec<InputMessage> {
 }
 
 fn print_help_to(out: &mut impl Write) -> io::Result<()> {
-    writeln!(out, "Claw Code CLI v{VERSION}")?;
+    // Use ANSI color when stdout is a TTY; plain text otherwise.
+    let color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let banner = if color {
+        format!(
+            "\x1b[38;2;217;119;87m✻\x1b[0m \x1b[1;38;2;185;28;28mNOT\x1b[0m \x1b[1;38;2;217;119;87mClaude Code\x1b[0m \x1b[2mv{VERSION}\x1b[0m"
+        )
+    } else {
+        format!("✻ NOT Claude Code v{VERSION}")
+    };
+    writeln!(out, "{banner}")?;
     writeln!(
         out,
-        "  Interactive coding assistant for the current workspace."
+        "  Local-first coding agent. Swarm of small local models, not one big cloud one."
     )?;
     writeln!(out)?;
     writeln!(out, "Quick start")?;
     writeln!(
         out,
-        "  claw                                  Start the interactive REPL"
+        "  notclaude                              Start the interactive REPL"
     )?;
     writeln!(
         out,
-        "  claw \"summarize this repo\"            Run one prompt and exit"
+        "  notclaude \"summarize this repo\"        Run one prompt and exit"
     )?;
     writeln!(
         out,
-        "  claw prompt \"explain src/main.rs\"     Explicit one-shot prompt"
+        "  notclaude prompt \"explain main.rs\"     Explicit one-shot prompt"
     )?;
     writeln!(
         out,
-        "  claw --resume SESSION.json /status    Inspect a saved session"
+        "  notclaude --resume SESSION.json /status  Inspect a saved session"
     )?;
     writeln!(out)?;
     writeln!(out, "Interactive essentials")?;
@@ -4021,32 +4030,24 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(out, "Commands")?;
     writeln!(
         out,
-        "  claw dump-manifests                   Read upstream TS sources and print extracted counts"
+        "  notclaude agents                       List configured agents"
     )?;
     writeln!(
         out,
-        "  claw bootstrap-plan                   Print the bootstrap phase skeleton"
+        "  notclaude skills                       List installed skills"
+    )?;
+    writeln!(out, "  notclaude system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
+    writeln!(
+        out,
+        "  notclaude login                        Start the OAuth login flow"
     )?;
     writeln!(
         out,
-        "  claw agents                           List configured agents"
+        "  notclaude logout                       Clear saved OAuth credentials"
     )?;
     writeln!(
         out,
-        "  claw skills                           List installed skills"
-    )?;
-    writeln!(out, "  claw system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
-    writeln!(
-        out,
-        "  claw login                            Start the OAuth login flow"
-    )?;
-    writeln!(
-        out,
-        "  claw logout                           Clear saved OAuth credentials"
-    )?;
-    writeln!(
-        out,
-        "  claw init                             Scaffold CLAW.md + local files"
+        "  notclaude init                         Scaffold CLAW.md + local files"
     )?;
     writeln!(out)?;
     writeln!(out, "Flags")?;

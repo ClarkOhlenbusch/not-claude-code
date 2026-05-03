@@ -274,7 +274,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "plugin",
         aliases: &["plugins", "marketplace"],
-        summary: "Manage Claw Code plugins",
+        summary: "Manage NOT Claude Code plugins",
         argument_hint: Some(
             "[list|install <path>|enable <name>|disable <name>|uninstall <id>|update <id>]",
         ),
