@@ -1172,12 +1172,12 @@ impl LiveCli {
         let result = self.runtime.run_turn(input, Some(&mut permission_prompter));
         match result {
             Ok(_) => {
+                // Silent finish — no "done" message, just clear the spinner.
                 spinner.finish(
-                    "✨ Done",
+                    "",
                     TerminalRenderer::new().color_theme(),
                     &mut stdout,
                 )?;
-                println!();
                 self.persist_session()?;
                 Ok(())
             }
@@ -3411,10 +3411,67 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
         _ => summarize_tool_payload(input),
     };
 
-    let border = "─".repeat(name.len() + 8);
-    format!(
-        "\x1b[38;5;245m╭─ \x1b[1;36m{name}\x1b[0;38;5;245m ─╮\x1b[0m\n\x1b[38;5;245m│\x1b[0m {detail}\n\x1b[38;5;245m╰{border}╯\x1b[0m"
-    )
+    // Claude Code-style tool-call rendering: orange ● bullet, tool name in
+    // bold orange with brief args, followed by detail on a continuation line
+    // prefixed with the dim ⎿ glyph.
+    let summary = tool_call_summary(name, &parsed);
+    let header = format!(
+        "\x1b[38;2;217;119;87m●\x1b[0m \x1b[1m{name}\x1b[0m{summary}"
+    );
+    if detail.is_empty() {
+        header
+    } else {
+        // Indent each detail line under the ⎿ continuation marker.
+        let indented_detail = detail
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if i == 0 {
+                    format!("  \x1b[2m⎿\x1b[0m  {line}")
+                } else {
+                    format!("     {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{header}\n{indented_detail}")
+    }
+}
+
+/// Brief one-line argument summary shown inline next to the tool name,
+/// like `Read(file.rs)` or `Bash(ls -la)`.
+fn tool_call_summary(name: &str, parsed: &serde_json::Value) -> String {
+    let inner = match name {
+        "bash" | "Bash" => parsed
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| truncate_for_summary(s, 60))
+            .unwrap_or_default(),
+        "read_file" | "Read" => extract_tool_path(parsed),
+        "write_file" | "Write" => extract_tool_path(parsed),
+        "edit_file" | "Edit" => extract_tool_path(parsed),
+        "glob_search" | "Glob" => parsed
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "grep_search" | "Grep" => parsed
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        "web_search" | "WebSearch" => parsed
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    };
+    if inner.is_empty() {
+        String::new()
+    } else {
+        format!("(\x1b[2m{inner}\x1b[0m)")
+    }
 }
 
 fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {

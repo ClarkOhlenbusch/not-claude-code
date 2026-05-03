@@ -85,14 +85,20 @@ impl Spinner {
         out: &mut impl Write,
     ) -> io::Result<()> {
         self.frame_index = 0;
-        execute!(
-            out,
-            MoveToColumn(0),
-            Clear(ClearType::CurrentLine),
-            SetForegroundColor(theme.spinner_done),
-            Print(format!("✔ {label}\n")),
-            ResetColor
-        )?;
+        // Empty label = silent finish (just clear the spinner line). Claude Code
+        // doesn't print a "done" indicator after each turn.
+        if label.is_empty() {
+            execute!(out, MoveToColumn(0), Clear(ClearType::CurrentLine))?;
+        } else {
+            execute!(
+                out,
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine),
+                SetForegroundColor(theme.spinner_done),
+                Print(format!("✔ {label}\n")),
+                ResetColor
+            )?;
+        }
         out.flush()
     }
 
