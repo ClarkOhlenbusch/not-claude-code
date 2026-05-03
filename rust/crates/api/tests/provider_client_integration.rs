@@ -2,8 +2,8 @@ use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
 use api::{
-    read_compute_community_qwen_base_url, read_xai_base_url, ApiError, AuthSource, ProviderClient,
-    ProviderKind,
+    read_compute_community_gemma4_base_url, read_compute_community_qwen_base_url,
+    read_xai_base_url, ApiError, AuthSource, ProviderClient, ProviderKind,
 };
 
 #[test]
@@ -33,6 +33,17 @@ fn provider_client_routes_compute_qwen_through_compute_community() {
 
     let client =
         ProviderClient::from_model("runpod-qwen36").expect("compute qwen alias should resolve");
+
+    assert_eq!(client.provider_kind(), ProviderKind::ComputeCommunity);
+}
+
+#[test]
+fn provider_client_routes_compute_gemma4_through_compute_community() {
+    let _lock = env_lock();
+    let _api_key = EnvVarGuard::set("COMPUTE_COMMUNITY_API_KEY", Some("cc-test-key"));
+
+    let client = ProviderClient::from_model("runpod-gemma4-31b")
+        .expect("compute gemma alias should resolve");
 
     assert_eq!(client.provider_kind(), ProviderKind::ComputeCommunity);
 }
@@ -116,6 +127,20 @@ fn read_compute_community_qwen_base_url_prefers_env_override() {
     assert_eq!(
         read_compute_community_qwen_base_url(),
         "https://example.compute.test/v1"
+    );
+}
+
+#[test]
+fn read_compute_community_gemma4_base_url_prefers_env_override() {
+    let _lock = env_lock();
+    let _base_url = EnvVarGuard::set(
+        "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+        Some("https://example.gemma.compute.test/v1"),
+    );
+
+    assert_eq!(
+        read_compute_community_gemma4_base_url(),
+        "https://example.gemma.compute.test/v1"
     );
 }
 

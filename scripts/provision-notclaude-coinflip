@@ -6,6 +6,7 @@ set -euo pipefail
 CONFIG_DIR="${NOTCLAUDE_CONFIG_HOME:-$HOME/.notclaude}"
 CONFIG_FILE="${NOTCLAUDE_COINFLIP_CONFIG:-$CONFIG_DIR/coinflip.env}"
 DEFAULT_BASE_URL="https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1"
+DEFAULT_GEMMA4_BASE_URL="https://computecommunity.com/u/CTFaQ3cxUcRbXCpuqCASNw9Y5xrU0LdQ/nodes/runpod-gemma-4-31b/v1"
 
 usage() {
   cat <<'EOF'
@@ -17,12 +18,14 @@ Options:
   --key VALUE       Compute Community API key to save locally.
   --config PATH     Config file path. Defaults to ~/.notclaude/coinflip.env.
   --base-url URL    Compute endpoint base URL.
+  --gemma-url URL   Runpod Gemma4 31B endpoint base URL.
   --help            Show this help.
 EOF
 }
 
 compute_key="${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}"
 base_url="${COMPUTE_QWEN36_BASE_URL:-${COMPUTE_COMMUNITY_QWEN_BASE_URL:-$DEFAULT_BASE_URL}}"
+gemma_url="${COMPUTE_GEMMA4_BASE_URL:-${COMPUTE_COMMUNITY_GEMMA4_BASE_URL:-$DEFAULT_GEMMA4_BASE_URL}}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -52,6 +55,14 @@ while [ "$#" -gt 0 ]; do
       base_url="${1#--base-url=}"
       shift
       ;;
+    --gemma-url)
+      gemma_url="${2:-}"
+      shift 2
+      ;;
+    --gemma-url=*)
+      gemma_url="${1#--gemma-url=}"
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -75,6 +86,7 @@ umask 077
 {
   printf 'COMPUTE_COMMUNITY_API_KEY=%s\n' "$compute_key"
   printf 'COMPUTE_QWEN36_BASE_URL=%s\n' "$base_url"
+  printf 'COMPUTE_GEMMA4_BASE_URL=%s\n' "$gemma_url"
 } >"$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 

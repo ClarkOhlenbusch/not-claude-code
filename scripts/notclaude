@@ -43,6 +43,8 @@ fi
 INVOKED_NAME="$(basename "$0")"
 COMPUTE_QWEN36_MODEL="Qwen/Qwen3.6-35B-A3B-FP8"
 COMPUTE_QWEN36_BASE_URL="${COMPUTE_QWEN36_BASE_URL:-https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1}"
+COMPUTE_GEMMA4_MODEL="google/gemma-4-31B-it"
+COMPUTE_GEMMA4_BASE_URL="${COMPUTE_GEMMA4_BASE_URL:-https://computecommunity.com/u/CTFaQ3cxUcRbXCpuqCASNw9Y5xrU0LdQ/nodes/runpod-gemma-4-31b/v1}"
 DEFAULT_MODEL="swarm"
 COINFLIP_CONFIG_DIR="${NOTCLAUDE_CONFIG_HOME:-$HOME/.notclaude}"
 COINFLIP_CONFIG_FILE="${NOTCLAUDE_COINFLIP_CONFIG:-$COINFLIP_CONFIG_DIR/coinflip.env}"
@@ -59,7 +61,7 @@ load_coinflip_config_file() {
     key="${line%%=*}"
     value="${line#*=}"
     case "$key" in
-      COMPUTE_COMMUNITY_API_KEY|COMPUTECOMMUNITY_API_KEY|CC_API_KEY|COMPUTE_QWEN36_BASE_URL|COMPUTE_COMMUNITY_QWEN_BASE_URL|NOTCLAUDE_SWARM_MODELS|NOTCLAUDE_SWARM_ORCHESTRATOR) ;;
+      COMPUTE_COMMUNITY_API_KEY|COMPUTECOMMUNITY_API_KEY|CC_API_KEY|COMPUTE_QWEN36_BASE_URL|COMPUTE_COMMUNITY_QWEN_BASE_URL|COMPUTE_GEMMA4_BASE_URL|COMPUTE_COMMUNITY_GEMMA4_BASE_URL|NOTCLAUDE_SWARM_MODELS|NOTCLAUDE_SWARM_ORCHESTRATOR) ;;
       *) continue ;;
     esac
     case "$value" in
@@ -87,6 +89,7 @@ require_coinflip_compute_key() {
 load_coinflip_config_file "$REPO_ROOT/.notclaude/coinflip.env"
 load_coinflip_config_file "$COINFLIP_CONFIG_FILE"
 COMPUTE_QWEN36_BASE_URL="${COMPUTE_COMMUNITY_QWEN_BASE_URL:-$COMPUTE_QWEN36_BASE_URL}"
+COMPUTE_GEMMA4_BASE_URL="${COMPUTE_COMMUNITY_GEMMA4_BASE_URL:-$COMPUTE_GEMMA4_BASE_URL}"
 COMPUTE_KEY="$(resolve_compute_key)"
 
 WANTS_HELP_OR_VERSION=0
@@ -108,7 +111,7 @@ if [ "$INVOKED_NAME" = "notclaude-coinflip" ] || [ "${NOTCLAUDE_COINFLIP_LAUNCHE
   fi
   if [ -z "${NOTCLAUDE_SWARM_MODELS:-}" ]; then
     if [ -n "$COMPUTE_KEY" ]; then
-      export NOTCLAUDE_SWARM_MODELS="runpod-qwen36"
+      export NOTCLAUDE_SWARM_MODELS="runpod-qwen36,runpod-gemma4-31b"
     else
       export NOTCLAUDE_SWARM_MODELS="gpt-5.5"
     fi
@@ -180,7 +183,30 @@ case "$REQUESTED_MODEL" in
       OPENAI_BASE_URL="$COMPUTE_QWEN36_BASE_URL" \
       "$CLAW_BIN" "$@"
     ;;
+  gemma|gemma4|gemma4-31b|runpod-gemma4-31b|google/gemma-4-31B-it|google/gemma-4-31b-it)
+    COMPUTE_KEY="${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-${OPENAI_API_KEY:-}}}}"
+    if [ -z "$COMPUTE_KEY" ]; then
+      echo "notclaude: missing Compute Community API key for $COMPUTE_GEMMA4_MODEL" >&2
+      echo "  set COMPUTE_COMMUNITY_API_KEY=cc_your_api_key" >&2
+      exit 1
+    fi
+    exec env \
+      COMPUTE_COMMUNITY_API_KEY="$COMPUTE_KEY" \
+      COMPUTE_COMMUNITY_GEMMA4_BASE_URL="$COMPUTE_GEMMA4_BASE_URL" \
+      OPENAI_API_KEY="$COMPUTE_KEY" \
+      OPENAI_BASE_URL="$COMPUTE_GEMMA4_BASE_URL" \
+      "$CLAW_BIN" "$@"
+    ;;
 esac
+
+if [ "$USES_HIVE_LOGIC" -eq 1 ]; then
+  if [ -z "${COMPUTE_COMMUNITY_API_KEY:-}" ]; then
+    export COMPUTE_COMMUNITY_API_KEY="${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}"
+  fi
+  export COMPUTE_COMMUNITY_QWEN_BASE_URL="${COMPUTE_COMMUNITY_QWEN_BASE_URL:-$COMPUTE_QWEN36_BASE_URL}"
+  export COMPUTE_COMMUNITY_GEMMA4_BASE_URL="${COMPUTE_COMMUNITY_GEMMA4_BASE_URL:-$COMPUTE_GEMMA4_BASE_URL}"
+  exec "$CLAW_BIN" "$@"
+fi
 
 # Start local Ollama if needed. Remote Ollama endpoints are only checked, not started.
 if ! curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null; then
@@ -221,16 +247,6 @@ if [ "$USES_HIVE_LOGIC" -eq 0 ] && [ "$REQUESTED_MODEL" = "$DEFAULT_MODEL" ]; th
       exit 1
     fi
   fi
-fi
-
-if [ "$USES_HIVE_LOGIC" -eq 1 ]; then
-  if [ -z "${COMPUTE_COMMUNITY_API_KEY:-}" ]; then
-    export COMPUTE_COMMUNITY_API_KEY="${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}"
-  fi
-  exec env \
-    OLLAMA_API_KEY="${OLLAMA_API_KEY:-ollama}" \
-    OLLAMA_BASE_URL="$OLLAMA_URL/v1" \
-    "$CLAW_BIN" "$@"
 fi
 
 exec env \

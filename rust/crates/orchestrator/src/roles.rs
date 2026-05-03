@@ -149,7 +149,7 @@ mod tests {
         let _orchestrator = EnvVarGuard::set("NOTCLAUDE_SWARM_ORCHESTRATOR", Some("gpt-5.5"));
         let _workers = EnvVarGuard::set(
             "NOTCLAUDE_SWARM_MODELS",
-            Some(" runpod-qwen36, gemma4:e2b "),
+            Some(" runpod-qwen36, runpod-gemma4-31b "),
         );
         let _intent = EnvVarGuard::set("NOTCLAUDE_SWARM_INTENT_MODEL", None);
         let _planner = EnvVarGuard::set("NOTCLAUDE_SWARM_PLANNER_MODEL", None);

@@ -22,6 +22,8 @@ pub const DEFAULT_CODEX_RESPONSES_BASE_URL: &str = "https://chatgpt.com/backend-
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
 pub const DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL: &str =
     "https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1";
+pub const DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL: &str =
+    "https://computecommunity.com/u/CTFaQ3cxUcRbXCpuqCASNw9Y5xrU0LdQ/nodes/runpod-gemma-4-31b/v1";
 const OLLAMA_PLACEHOLDER_KEY: &str = "ollama";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
@@ -87,6 +89,16 @@ impl OpenAiCompatConfig {
             api_key_env: "COMPUTE_COMMUNITY_API_KEY",
             base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
             default_base_url: DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
+        }
+    }
+
+    #[must_use]
+    pub const fn compute_community_gemma4() -> Self {
+        Self {
+            provider_name: "ComputeCommunity",
+            api_key_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
         }
     }
 
