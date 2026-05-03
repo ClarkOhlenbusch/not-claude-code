@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
     resolve_startup_auth_source, AuthSource, ClawApiClient, ContentBlockDelta, InputContentBlock,
+    ProviderClient,
     InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
@@ -3040,7 +3041,7 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
 
 struct DefaultRuntimeClient {
     runtime: tokio::runtime::Runtime,
-    client: ClawApiClient,
+    client: ProviderClient,
     model: String,
     enable_tools: bool,
     emit_output: bool,
@@ -3060,8 +3061,14 @@ impl DefaultRuntimeClient {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
-            client: ClawApiClient::from_auth(resolve_cli_auth_source()?)
-                .with_base_url(api::read_base_url()),
+            // Route to the right provider based on model name. For Claude/Anthropic
+            // models, pass any resolved Claw auth (env vars or saved OAuth) so we
+            // don't redundantly read from env. For OpenAI-compat / xAI models, the
+            // OAuth resolution failure is irrelevant (.ok() makes it None).
+            client: ProviderClient::from_model_with_default_auth(
+                &model,
+                resolve_cli_auth_source().ok(),
+            )?,
             model,
             enable_tools,
             emit_output,
