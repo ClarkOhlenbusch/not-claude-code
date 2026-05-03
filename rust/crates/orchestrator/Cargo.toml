@@ -10,6 +10,7 @@ runtime = { path = "../runtime" }
 api = { path = "../api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [lints]
 workspace = true

@@ -3103,8 +3103,11 @@ fn build_runtime(
     )?;
 
     let api_client: Box<dyn runtime::ApiClient + Send> = if is_swarm {
-        Box::new(orchestrator::OrchestratorRuntime::with_default_roles(
+        // Phase 3-4: planner + reviewer + retry are active. Phase 1's
+        // transparent passthrough was just `with_default_roles`.
+        Box::new(orchestrator::OrchestratorRuntime::with_orchestration_enabled(
             Box::new(inner_client),
+            orchestrator::RoleConfig::default(),
         ))
     } else {
         Box::new(inner_client)
