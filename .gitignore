@@ -15,9 +15,9 @@ Cargo.lock.bk
 .claude/settings.local.json
 .claude/sessions/
 
-# Claw local artifacts
-.claw/sessions/
-.claw/credentials.json
+# Claw local artifacts (anchored slashes need ** to match at any depth)
+**/.claw/sessions/
+**/.claw/credentials.json
 
 # Local model artifacts (cache, etc.)
 .models/
