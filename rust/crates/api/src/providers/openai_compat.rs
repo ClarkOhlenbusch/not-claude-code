@@ -424,26 +424,48 @@ impl StreamState {
 
     /// Route text deltas through buffer-mode logic so we can detect & synthesize
     /// tool calls that the upstream server emitted as text JSON.
+    ///
+    /// Three behaviors based on `buffer_mode`:
+    /// * `Pending`: first non-whitespace chunk decides — `{` or ` ``` ` opens
+    ///   `Buffering`; anything else opens `PassThrough`.
+    /// * `Buffering`: accumulate everything silently; parse on `finish`.
+    /// * `PassThrough`: emit as text deltas live, BUT also watch for
+    ///   `{` / ` ``` ` appearing mid-stream — at that point split the chunk:
+    ///   emit the prefix as text, switch to `Buffering` for the suffix.
+    ///   This lets preamble like "Sure, here is the call:" stream normally
+    ///   while still suppressing the JSON itself.
     fn handle_text_delta(&mut self, content: String, events: &mut Vec<StreamEvent>) {
-        // Once we've decided pass-through, fast path.
         if self.buffer_mode == TextBufferMode::PassThrough {
-            self.emit_text_start_if_needed(events);
-            events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                index: 0,
-                delta: ContentBlockDelta::TextDelta { text: content },
-            }));
+            // Look for tool-call onset mid-stream.
+            if let Some(idx) = find_tool_call_start(&content) {
+                let (pre, post) = content.split_at(idx);
+                if !pre.is_empty() {
+                    self.emit_text_start_if_needed(events);
+                    events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                        index: 0,
+                        delta: ContentBlockDelta::TextDelta {
+                            text: pre.to_string(),
+                        },
+                    }));
+                }
+                self.buffer_mode = TextBufferMode::Buffering;
+                self.text_buffer.push_str(post);
+            } else {
+                self.emit_text_start_if_needed(events);
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::TextDelta { text: content },
+                }));
+            }
             return;
         }
-        // In buffer or pending mode — accumulate first, then decide.
+        // In Buffering or Pending mode — accumulate first, then decide.
         self.text_buffer.push_str(&content);
         if self.buffer_mode == TextBufferMode::Pending {
             let trimmed_start = self.text_buffer.trim_start();
             if trimmed_start.is_empty() {
                 return; // still all whitespace; wait for more
             }
-            // First non-WS chunk decides the mode. We buffer if it looks like
-            // a JSON object OR a markdown code fence (Qwen often wraps tool
-            // calls in ```json ... ```).
             self.buffer_mode = if trimmed_start.starts_with('{')
                 || trimmed_start.starts_with("```")
             {
@@ -452,15 +474,31 @@ impl StreamState {
                 TextBufferMode::PassThrough
             };
             if self.buffer_mode == TextBufferMode::PassThrough {
-                // Drain whatever we buffered as a normal text delta.
+                // Drain whatever we buffered as a normal text delta —
+                // and re-check for mid-stream tool-call onset since the
+                // preamble might already contain the `{`.
                 let drained = std::mem::take(&mut self.text_buffer);
-                self.emit_text_start_if_needed(events);
-                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::TextDelta { text: drained },
-                }));
+                if let Some(idx) = find_tool_call_start(&drained) {
+                    let (pre, post) = drained.split_at(idx);
+                    if !pre.is_empty() {
+                        self.emit_text_start_if_needed(events);
+                        events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                            index: 0,
+                            delta: ContentBlockDelta::TextDelta {
+                                text: pre.to_string(),
+                            },
+                        }));
+                    }
+                    self.buffer_mode = TextBufferMode::Buffering;
+                    self.text_buffer.push_str(post);
+                } else {
+                    self.emit_text_start_if_needed(events);
+                    events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                        index: 0,
+                        delta: ContentBlockDelta::TextDelta { text: drained },
+                    }));
+                }
             }
-            // If Buffering, just keep accumulating — emit on finish().
         }
     }
 
@@ -484,9 +522,10 @@ impl StreamState {
             return false;
         }
         let cleaned = strip_code_fences(self.text_buffer.trim());
-        // If the buffer didn't actually start with a code fence (just `{`),
-        // strip_code_fences returns the input unchanged — that's fine.
-        let Ok(value) = serde_json::from_str::<Value>(cleaned) else {
+        // Models (Qwen especially) sometimes emit JSON with Unicode smart
+        // quotes — normalize to ASCII before parse.
+        let normalized = normalize_smart_quotes(cleaned);
+        let Ok(value) = serde_json::from_str::<Value>(&normalized) else {
             return false;
         };
         // Accept either {"name":"...","arguments":{...}} (Qwen / common shape)
@@ -1049,6 +1088,29 @@ fn normalize_finish_reason(value: &str) -> String {
         other => other,
     }
     .to_string()
+}
+
+/// Earliest index in `s` of a tool-call onset marker. We look for either
+/// `{` (a bare JSON object) or ` ``` ` (a markdown code fence). Returns the
+/// byte offset of whichever appears first, or `None` if neither appears.
+fn find_tool_call_start(s: &str) -> Option<usize> {
+    let brace = s.find('{');
+    let fence = s.find("```");
+    match (brace, fence) {
+        (Some(b), Some(f)) => Some(b.min(f)),
+        (Some(b), None) => Some(b),
+        (None, Some(f)) => Some(f),
+        (None, None) => None,
+    }
+}
+
+/// Replace Unicode curly quotes with ASCII so serde_json can parse the
+/// model's output. Common Qwen-via-Ollama quirk.
+fn normalize_smart_quotes(s: &str) -> String {
+    s.replace('\u{201C}', "\"")  // LEFT DOUBLE QUOTATION MARK
+        .replace('\u{201D}', "\"") // RIGHT DOUBLE QUOTATION MARK
+        .replace('\u{2018}', "'")  // LEFT SINGLE QUOTATION MARK
+        .replace('\u{2019}', "'")  // RIGHT SINGLE QUOTATION MARK
 }
 
 /// Strip surrounding ```json ... ``` (or plain ``` ... ```) fences so we can
