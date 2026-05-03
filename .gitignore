@@ -22,3 +22,4 @@ Cargo.lock.bk
 # Local model artifacts (cache, etc.)
 .models/
 *.gguf
+index.html
