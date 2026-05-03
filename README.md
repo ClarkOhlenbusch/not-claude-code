@@ -1,137 +1,112 @@
-# ClaudeCode (Open Source)
+# NOT Claude Code
 
-**A high-performance, open-source AI coding agent written in Rust.**
+Local-first coding agent. Replaces the single cloud-LLM call with a swarm of role-specialized small local models (router, planner, patcher, reviewer) coordinated by deterministic repo maps, git worktrees, structured outputs, and test-loop verification.
 
-ClaudeCode is a terminal-native CLI agent designed to bring advanced LLM capabilities directly into your development workflow. Built for speed, safety, and efficiency, it provides an interactive agent shell, workspace-aware tools, and persistent session management. It is an independent open-source implementation inspired by Claude Code, not the official Anthropic product.
+**Thesis:** specialization + verification beats one bigger local model on coding tasks. Kill criterion: must beat DeepSeek-Coder-V2-Lite (16B MoE) running alone, on the same hardware and task suite.
 
-![View Count](https://komarev.com/ghpvc/?username=soongenwong&label=Total+views&color=ffa500&style=for-the-badge)
+## Status
 
-## Star History
+Phase 0 — base harness routing local models end-to-end via Ollama.
 
-<a href="https://www.star-history.com/?repos=soongenwong%2Fclaudecode&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=soongenwong/claudecode&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=soongenwong/claudecode&type=date&legend=top-left" />
-   <img alt="ClaudeCode Star History" src="https://api.star-history.com/chart?repos=soongenwong/claudecode&type=date&legend=top-left" />
- </picture>
-</a>
+| | |
+|---|---|
+| Build | green (`cargo build`) |
+| `claw --help` | works |
+| `claw "prompt"` against a local Ollama model | works |
+| Tool dispatch from local models | broken (format mismatch — see below) |
+| Multi-model orchestrator | not started |
+| Benchmark harness | not started |
 
-## Related Projects
+## Quick start
 
-- [Anthropic developer docs](https://platform.claude.com/docs)
-- [Anthropic](https://www.anthropic.com/)
-- [Anthropic on X](https://x.com/AnthropicAI)
-
-## Key Features
-
-- **Rust-powered:** Built with Rust for memory safety, minimal binary size, and high execution speed.
-- **Agentic CLI:** Interactive shell and one-shot prompt support for seamless terminal workflows.
-- **Model flexible:** Supports Anthropic-compatible and OpenAI-compatible providers, plus xAI/Grok aliases.
-- **Workspace aware:** Context-aware tools designed to understand your local codebase.
-- **Session persistence:** Resumeable sessions via JSON state management.
-- **Extensible:** Plugin-ready architecture for custom tools and skills.
-
-## Getting Started
-
-### Prerequisites
-
-1. [Install Rust](https://www.rust-lang.org/tools/install) stable and Cargo.
-2. Set up your preferred API credentials.
-
-### Installation
-
-From the repository root:
+Prereqs: Rust 1.90+, Ollama, ~10 GB disk for the model.
 
 ```bash
-cd rust
-cargo build --release -p claw-cli
+git clone https://github.com/ClarkOhlenbusch/not-claude-code
+cd not-claude-code/rust
+cargo build
 
-# Install locally to your PATH for global access
-cargo install --path crates/claw-cli --locked
+# In another terminal:
+ollama serve
+
+# First-time only — pull the workhorse model (~4.7 GB):
+ollama pull qwen2.5-coder:7b
+
+# Test:
+OPENAI_API_KEY=ollama \
+OPENAI_BASE_URL=http://localhost:11434/v1 \
+./target/debug/claw --model qwen2.5-coder:7b "say hi in one short sentence"
 ```
 
-### Usage
+Expected output: `Hi there! How can I assist you today?`
 
-Start the interactive shell:
+## How the routing works
 
-```bash
-claw
+`claw` ships with three providers in `crates/api/src/providers/`: `claw_provider` (Anthropic), `openai_compat` (OpenAI / xAI / anything that speaks OpenAI chat-completions). The CLI calls `ProviderClient::from_model(&model)` which picks a provider by:
+
+1. If model name matches `MODEL_REGISTRY` (claude-*, grok-*, opus, sonnet, haiku) → that provider's metadata.
+2. Else if `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / saved Claw OAuth available → `ClawApi`.
+3. Else if `OPENAI_API_KEY` set → `OpenAi`.
+4. Else if `XAI_API_KEY` set → `Xai`.
+5. Default → `ClawApi` (will then error on missing creds).
+
+Ollama exposes an OpenAI-compatible API at `localhost:11434/v1`, so any model name not in the registry (e.g. `qwen2.5-coder:7b`) routes through the OpenAI provider when `OPENAI_API_KEY` is set. The key value is irrelevant to Ollama but the provider requires it non-empty — set anything (`ollama` is conventional).
+
+## Hardware target
+
+Reference: MacBook Pro M4 Pro, 24 GB unified memory. Practical model lineup at Q4 quantization:
+
+| Role | Model | Footprint |
+|---|---|---|
+| Router (intent classification) | Qwen2.5-3B-Instruct | ~2 GB |
+| Planner + Patcher | Qwen2.5-Coder-14B-Instruct | ~9 GB |
+| Reviewer + Critic | Qwen2.5-Coder-7B-Instruct | ~4.5 GB |
+| Embeddings (repo retrieval) | nomic-embed-text-v1.5 | ~250 MB |
+| Single-model baseline (A/B) | DeepSeek-Coder-V2-Lite-Instruct (16B MoE, 2.4B active) | ~10 GB |
+
+~16 GB hot, fits with ~7 GB OS overhead. Memory bandwidth ~273 GB/s is shared between concurrent inference — keep models loaded but inference 1–2 at a time.
+
+## Architecture (planned)
+
+```
+User prompt
+   ↓
+[Router 3B] ── classify: question | single-edit | multi-step
+   ↓
+[Planner 14B] ── emit step list + target files (structured JSON)
+   ↓
+For each step:
+   [Mapper, deterministic] ── tree-sitter repo map + embedding retrieval
+   [Patch writer 14B] ── structured diff output (search/replace blocks)
+   [Verifier, deterministic] ── apply in worktree, run tests + typecheck + lint
+   ├── FAIL → [Critic 7B] ── explain failure → retry ≤2x or replan
+   └── PASS → [Reviewer 7B] ── does diff match intent?
+   [Compressor 7B] ── summarize step → rolling context
 ```
 
-Run a single prompt:
+Surgery site: `crates/claw-cli/src/main.rs` `DefaultRuntimeClient::stream` (~line 3088). Currently calls `self.client.stream_message(&request)` against a single `ProviderClient`. The orchestrator will be a new variant of `ProviderClient` (or a parallel construct) that dispatches across multiple Ollama models per role.
 
-```bash
-claw prompt "summarize this workspace"
-```
+## Known issues
 
-Resume a previous session:
+**Tool calls don't dispatch from local models.** Qwen-7B emits tool calls as text JSON (with smart quotes), not as OpenAI's structured `tool_calls` field. Claw treats them as plain output and doesn't execute them. This blocks any prompt that needs file edits or shell exec. Two fixes possible:
 
-```bash
-claw --resume session.json /status
-```
+1. Post-process model output: regex-extract JSON blocks, normalize quotes, dispatch as tool calls. Fragile but quick.
+2. Switch hot paths from Ollama to llama.cpp server with GBNF grammar to constrain output to valid `tool_calls` JSON. Cleaner, requires extra infra.
 
-Run `claw --help` for the full command list, including agents, skills, and system-prompt flows.
+Will be addressed alongside the orchestrator work — different roles need different output formats anyway.
 
-## Authentication
+## Roadmap
 
-Configure your environment variables based on your preferred provider:
+- [x] Build harness; route through Ollama; pass smoke test
+- [ ] Fix tool-call format mismatch (text JSON → structured)
+- [ ] Implement `LocalSwarmClient` that dispatches router → planner → patcher → reviewer per turn
+- [ ] Add tree-sitter repo map (port from Aider's algorithm)
+- [ ] Wire git worktrees per task for safe rollback
+- [ ] Build a 5–10 task benchmark suite with deterministic pass/fail
+- [ ] Run head-to-head: swarm vs DeepSeek-Coder-V2-Lite alone
 
-### Anthropic
+## Provenance
 
-```bash
-export ANTHROPIC_API_KEY="..."
-export ANTHROPIC_BASE_URL="https://api.anthropic.com"
-```
+Forked from [soongenwong/claudecode](https://github.com/soongenwong/claudecode) — an MIT-licensed Rust clean-room reimplementation of Claude Code (independent, no leaked source copied per the upstream `PARITY.md`). The upstream is an MVP scaffold of Claude Code, not feature-complete; that's fine, we're swapping the LLM layer regardless. We pruned the Python parity sketch and top-level tests to focus on the Rust workspace under `rust/`.
 
-### OpenAI-compatible
-
-```bash
-export OPENAI_API_KEY="..."
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-```
-
-### Grok / xAI
-
-```bash
-export XAI_API_KEY="..."
-export XAI_BASE_URL="https://api.x.ai"
-```
-
-You can also authenticate via the CLI:
-
-```bash
-claw login
-```
-
-## Frequently Asked Questions
-
-**What is this project?** This is an independent, open-source implementation of a terminal-based coding agent, architecturally inspired by Claude Code.
-
-**Why Rust?** Rust provides the performance, concurrency, and memory safety required for a tool that interacts deeply with local file systems and high-latency LLM APIs.
-
-**Can I use local models?** Yes, if your local inference server exposes an OpenAI-compatible API and you point the relevant base URL and API key at it.
-
-**Is this the official Anthropic Claude Code?** No, this is a community-driven open-source project.
-
-## Development
-
-We welcome contributions. Please refer to CLAW.md for workspace-specific workflow guidance.
-
-```bash
-cd rust
-cargo fmt
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-## Repository Structure
-
-- `rust/`: Core CLI and runtime implementation.
-- `src/`: Python support code and utilities.
-- `tests/`: Verification suites for agentic behaviors.
-- `CLAW.md`: Internal workflow documentation.
-
-## Notes
-
-- This project is an open-source implementation.
-- It is not affiliated with or endorsed by Anthropic.
+License: MIT (inherited from upstream). See `LICENSE`.
