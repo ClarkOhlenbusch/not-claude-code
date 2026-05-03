@@ -1,54 +1,77 @@
 # NOT Claude Code
 
-Local-first coding agent. Replaces the single cloud-LLM call with a swarm of role-specialized small local models (router, planner, patcher, reviewer) coordinated by deterministic repo maps, git worktrees, structured outputs, and test-loop verification.
+A local-first coding agent that looks and feels like Claude Code, but runs entirely on local models via Ollama. The harness is a Rust clean-room reimplementation; the model is whatever you have pulled. Default lineup uses Qwen2.5-Coder-14B (~9 GB).
 
-**Thesis:** specialization + verification beats one bigger local model on coding tasks. Kill criterion: must beat DeepSeek-Coder-V2-Lite (16B MoE) running alone, on the same hardware and task suite.
+**Project thesis (longer term):** specialization + verification beats one bigger local model on coding tasks — a swarm of role-specialized small models (router, planner, patcher, reviewer) coordinated by deterministic repo maps, git worktrees, structured outputs, and test-loop verification. Kill criterion: must beat DeepSeek-Coder-V2-Lite (16B MoE) running alone, on the same hardware and task suite.
+
+**Current phase:** single-model baseline working. The orchestrator is a future enhancement, not a foundation requirement — see "What we learned" below.
 
 ## Status
 
-Phase 0 — base harness routing local models end-to-end via Ollama.
-
 | | |
 |---|---|
-| Build | green (`cargo build`) |
-| `claw --help` | works |
-| `claw "prompt"` against a local Ollama model | works |
-| Tool dispatch from local models | works (text-JSON synthesis layer in OpenAI provider) |
-| Single-model agent loop converges reliably | no — small models pick wrong tools, loop without terminating |
-| Multi-model orchestrator | not started |
+| Build | green (`cargo build --release`, ~10s after first compile) |
+| `notclaude --help`, `--version` | works, NOT Claude Code branded |
+| Chat against a local model (any size) | works |
+| Single tool call (write/read/edit) at 14B | works reliably |
+| Multi-step agentic turn at 14B | works (writes file, runs bash, recovers from errors, reports result) |
+| TUI feel | mimics Claude Code: orange `●` tool bullets, `⎿` continuations, `✻ Thinking…` spinner, silent finish |
+| Multi-model orchestrator | not started — gated on benchmark first |
 | Benchmark harness | not started |
 
 ## Quick start
 
-Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~5 GB disk for the model.
+Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~10 GB free disk.
 
 ```bash
 git clone https://github.com/ClarkOhlenbusch/not-claude-code
 cd not-claude-code
 
-# Build optimized binary
+# Build optimized binary (~16s first time, ~3s incremental)
 (cd rust && cargo build --release)
 
 # Install the wrapper command (creates ~/.local/bin/notclaude → scripts/notclaude)
 mkdir -p ~/.local/bin && ln -sf "$PWD/scripts/notclaude" ~/.local/bin/notclaude
 
-# Pull the default model (~4.7 GB, one-time)
-ollama pull qwen2.5-coder:7b
+# Pull the recommended model (~9 GB, one-time)
+ollama pull qwen2.5-coder:14b
 
 # Use it (Ollama auto-starts if not already running)
-notclaude "say hi"
+notclaude "say hi"                     # one-shot prompt
 notclaude                              # interactive REPL
-notclaude --model some-other-model "…" # override default
+notclaude --model qwen2.5-coder:7b "…" # smaller / faster (less reliable for agentic tasks)
 ```
 
-Make sure `~/.local/bin` is on your `$PATH` (it usually is on macOS).
+Make sure `~/.local/bin` is on your `$PATH`. The wrapper sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL=http://localhost:11434/v1`, and defaults `--model` to `qwen2.5-coder:14b`.
 
-The `notclaude` wrapper sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL=http://localhost:11434/v1`, and defaults `--model` to `qwen2.5-coder:7b`. Equivalent without it:
+## What works at each model size
 
-```bash
-OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://localhost:11434/v1 \
-  ./rust/target/release/claw --model qwen2.5-coder:7b "say hi"
-```
+We have actual evidence here, not vibes. Same three test prompts across model sizes:
+
+| Test | 7B | 14B |
+|---|---|---|
+| `"say hi"` (chat) | ✓ | ✓ |
+| `"create /tmp/x.html with …"` (single tool call) | inconsistent — sometimes calls tool, sometimes asks permission, sometimes generates code in chat | ✓ reliably |
+| `"edit /tmp/x.html — add …"` (edit at correct position) | inconsistent — occasionally invalid HTML | ✓ correct position |
+| `"write a python function, save to /tmp/y.py, run it"` (multi-step write+run) | sometimes refuses tools entirely; when it tries, sequencing flaky | ✓ writes file, runs it, recovers from errors |
+
+**Recommendation:** use 14B as default. 7B is too small for consistent agentic decision-making in this harness.
+
+## What we learned (system prompt was the missing piece)
+
+The harness was holding back the model as much as the model was. Initial 7B tests had it refusing to use tools at all ("I can't access files on your system, you do it manually"). Reading Claude Code's leaked source ([codeaashu/claude-code](https://github.com/codeaashu/claude-code)) revealed claw was missing the entire **"Using your tools"** section of Claude Code's system prompt — the part that explicitly tells the model:
+
+- Use `read_file` (not cat/head/tail/sed) for reads
+- Use `edit_file` (not sed/awk) for edits
+- Use `write_file` (not heredoc) for creation
+- Use `glob_search`/`grep_search` (not find/grep) for searches
+- Reserve bash for genuine system commands
+- That tools have permissions and the model SHOULD call them, not narrate intent
+- Multiple parallel tool calls are OK when independent
+
+Porting that section into `crates/runtime/src/prompt.rs` (commit `6edf819`) was the single biggest behavior-change of the project so far. Same model, same harness, same prompts — went from "I can't do that" to actually doing the multi-step task.
+
+Lesson: every gap between claw's prompt scaffolding and Claude Code's makes the local model behave more like an inert API.
 
 ## How the routing works
 
@@ -58,25 +81,37 @@ OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://localhost:11434/v1 \
 2. Else if `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / saved Claw OAuth available → `ClawApi`.
 3. Else if `OPENAI_API_KEY` set → `OpenAi`.
 4. Else if `XAI_API_KEY` set → `Xai`.
-5. Default → `ClawApi` (will then error on missing creds).
+5. Default → `ClawApi` (errors on missing creds).
 
-Ollama exposes an OpenAI-compatible API at `localhost:11434/v1`, so any model name not in the registry (e.g. `qwen2.5-coder:7b`) routes through the OpenAI provider when `OPENAI_API_KEY` is set. The key value is irrelevant to Ollama but the provider requires it non-empty — set anything (`ollama` is conventional).
+Ollama exposes an OpenAI-compatible API at `localhost:11434/v1`, so any model name not in the registry (e.g. `qwen2.5-coder:14b`) routes through the OpenAI provider when `OPENAI_API_KEY` is set.
+
+## Tool-call synthesis layer
+
+Ollama's OpenAI-compat layer (with Qwen models) doesn't always emit structured `tool_calls` — it sometimes emits the tool call as JSON in the text content. The OpenAI provider's stream parser detects this and synthesizes proper `ToolUse` events. Handles:
+
+- Text JSON: `{"name": "read_file", "arguments": {...}}`
+- Markdown-fenced JSON: ` ```json {…} ``` `
+- Smart-quoted JSON (Qwen Unicode quirk): `{"name": …}` → normalized to ASCII before parse
+- Preamble text: model says "Sure, here is: {…}" — the JSON is detected mid-stream and split out
+- **Multiple concatenated tool calls**: `{tool1}{tool2}` — each balanced top-level `{}` block is parsed independently, each emits its own ToolUse event
+
+See `crates/api/src/providers/openai_compat.rs` `handle_text_delta` and `extract_balanced_json_blocks`.
 
 ## Hardware target
 
 Reference: MacBook Pro M4 Pro, 24 GB unified memory. Practical model lineup at Q4 quantization:
 
-| Role | Model | Footprint |
+| Model | Footprint | Use |
 |---|---|---|
-| Router (intent classification) | Qwen2.5-3B-Instruct | ~2 GB |
-| Planner + Patcher | Qwen2.5-Coder-14B-Instruct | ~9 GB |
-| Reviewer + Critic | Qwen2.5-Coder-7B-Instruct | ~4.5 GB |
-| Embeddings (repo retrieval) | nomic-embed-text-v1.5 | ~250 MB |
-| Single-model baseline (A/B) | DeepSeek-Coder-V2-Lite-Instruct (16B MoE, 2.4B active) | ~10 GB |
+| `qwen2.5-coder:14b` | ~9 GB | recommended default — handles agentic tasks reliably |
+| `qwen2.5-coder:7b` | ~4.5 GB | faster, lower quality, fine for simple chat |
+| `qwen2.5-coder:3b` | ~2 GB | future router/classifier role |
+| `nomic-embed-text:v1.5` | ~250 MB | future repo retrieval |
+| `deepseek-coder-v2:16b` (MoE) | ~10 GB | A/B baseline for the swarm thesis |
 
-~16 GB hot, fits with ~7 GB OS overhead. Memory bandwidth ~273 GB/s is shared between concurrent inference — keep models loaded but inference 1–2 at a time.
+M4 Pro memory bandwidth is ~273 GB/s, shared between concurrent inferences — keep models loaded but only run 1–2 at a time.
 
-## Architecture (planned)
+## Future architecture (the project's thesis)
 
 ```
 User prompt
@@ -87,33 +122,42 @@ User prompt
    ↓
 For each step:
    [Mapper, deterministic] ── tree-sitter repo map + embedding retrieval
-   [Patch writer 14B] ── structured diff output (search/replace blocks)
+   [Patch writer 14B] ── structured diff output
    [Verifier, deterministic] ── apply in worktree, run tests + typecheck + lint
    ├── FAIL → [Critic 7B] ── explain failure → retry ≤2x or replan
    └── PASS → [Reviewer 7B] ── does diff match intent?
    [Compressor 7B] ── summarize step → rolling context
 ```
 
-Surgery site: `crates/claw-cli/src/main.rs` `DefaultRuntimeClient::stream` (~line 3088). Currently calls `self.client.stream_message(&request)` against a single `ProviderClient`. The orchestrator will be a new variant of `ProviderClient` (or a parallel construct) that dispatches across multiple Ollama models per role.
+This is **future work, not foundation**. We confirmed (above) that single-model 14B handles real agentic tasks. The orchestrator earns its keep by being faster (smaller models for routing/judging), more specialized (deterministic verification, planner that knows tools), and ideally better than 14B on hard tasks. We need a benchmark before building it.
+
+Surgery site for the orchestrator: `crates/claw-cli/src/main.rs` `DefaultRuntimeClient::stream` — currently calls `self.client.stream_message(&request)` against a single `ProviderClient`. The orchestrator becomes a new `ProviderClient` variant that dispatches across multiple Ollama calls per turn.
 
 ## Known issues
 
-**Single-model agent loops don't converge.** Qwen-7B picks the wrong tool for a given task (e.g., chooses `SendUserMessage` to "answer" a "read this file" prompt) and re-emits the same tool call repeatedly without terminating. This is exactly what the multi-model orchestrator is designed to solve — a small router decides "this is a single-step task, stop after one tool call," and a bigger planner picks tools deliberately. Workaround for now: keep prompts conversational rather than agentic; don't ask single-model claw to do multi-step coding.
+**Tool-call sequencing at smaller model sizes.** When a single response includes multiple tool calls (e.g. write file + run it), small models occasionally emit them in the wrong order. The harness dispatches in emission order. 14B is reliable; 7B sometimes fails. Mitigations: prompt the user to break into single steps, or implement the orchestrator's planner role.
 
-**Tool-call format synthesis is heuristic.** The OpenAI provider's stream parser detects text whose first non-whitespace char is `{` or ` ``` ` and tries to parse it as `{"name": ..., "arguments": ...}`. Works for Qwen2.5-Coder's typical output but won't catch every shape (e.g., a tool call preceded by chatty text like "Sure, I'll read that file: {json}" — the `{` isn't first). If the model's intent is ambiguous, set `OLLAMA_*` env vars to test other models. Long-term fix is GBNF grammar enforcement via llama.cpp server — slower path, cleaner result.
+**Default bash timeout is 10 ms.** This is from the upstream Rust harness, almost certainly a typo (probably meant 10 seconds). Even 14B retries when it hits this, but it adds a turn. Should bump to a sane default.
 
 ## Roadmap
 
 - [x] Build harness; route through Ollama; pass smoke test
-- [x] Synthesize structured tool_use events from text-JSON model output
+- [x] Synthesize structured tool_use events from text-JSON model output (with smart-quote, code-fence, preamble-text, multi-call handling)
+- [x] Port "Using your tools" system prompt section from Claude Code source
+- [x] Visual rebrand: NOT Claude Code (red NOT, orange Claude Code, ✻ spinner, ● tool bullets)
+- [x] `notclaude` wrapper command for one-line invocation
+- [x] Verify single-model 14B baseline handles real agentic tasks
+- [ ] Fix the 10ms bash timeout
+- [ ] Build a 5–10 task benchmark suite with deterministic pass/fail (the kill-criterion infrastructure)
 - [ ] Implement `LocalSwarmClient` that dispatches router → planner → patcher → reviewer per turn
+- [ ] Run head-to-head: swarm vs single-model 14B vs DeepSeek-Coder-V2-Lite on the benchmark
 - [ ] Add tree-sitter repo map (port from Aider's algorithm)
 - [ ] Wire git worktrees per task for safe rollback
-- [ ] Build a 5–10 task benchmark suite with deterministic pass/fail
-- [ ] Run head-to-head: swarm vs DeepSeek-Coder-V2-Lite alone
 
 ## Provenance
 
 Forked from [soongenwong/claudecode](https://github.com/soongenwong/claudecode) — an MIT-licensed Rust clean-room reimplementation of Claude Code (independent, no leaked source copied per the upstream `PARITY.md`). The upstream is an MVP scaffold of Claude Code, not feature-complete; that's fine, we're swapping the LLM layer regardless. We pruned the Python parity sketch and top-level tests to focus on the Rust workspace under `rust/`.
+
+System-prompt content for the "Using your tools" section was ported from [codeaashu/claude-code](https://github.com/codeaashu/claude-code), the leaked Claude Code TypeScript source — that repo was used as a *reference* only, not a code base.
 
 License: MIT (inherited from upstream). See `LICENSE`.
