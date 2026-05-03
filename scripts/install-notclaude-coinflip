@@ -22,9 +22,11 @@ if [ -z "$BIN_DIR" ]; then
 fi
 
 COINFLIP_TARGET="$BIN_DIR/notclaude-coinflip"
+PROVISION_TARGET="$BIN_DIR/provision-notclaude-coinflip"
 
 mkdir -p "$BIN_DIR"
 ln -sf "$REPO_ROOT/scripts/notclaude" "$COINFLIP_TARGET"
+ln -sf "$REPO_ROOT/scripts/provision-notclaude-coinflip" "$PROVISION_TARGET"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -41,10 +43,17 @@ case ":$PATH:" in
 esac
 
 echo "notclaude-coinflip installed at $COINFLIP_TARGET"
+echo "provision-notclaude-coinflip installed at $PROVISION_TARGET"
 if command -v notclaude-coinflip >/dev/null 2>&1; then
   echo "Coinflip: notclaude-coinflip"
 else
   echo "Current shell cannot see $BIN_DIR yet."
   echo "Run now: export PATH=\"$BIN_DIR:\$PATH\""
   echo "Then: notclaude-coinflip"
+fi
+
+if [ -n "${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}" ]; then
+  "$REPO_ROOT/scripts/provision-notclaude-coinflip"
+else
+  echo "Compute config: provision-notclaude-coinflip --key cc_your_api_key"
 fi

@@ -64,6 +64,12 @@ Install the dedicated coinflip entry point when you want an explicit command for
 ./scripts/install-notclaude-coinflip
 ```
 
+If `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` is already in the environment, the installer also writes the local ignored compute config. Otherwise provision it explicitly once:
+
+```bash
+provision-notclaude-coinflip --key cc_your_api_key
+```
+
 `notclaude-coinflip` uses the existing swarm path in the Rust CLI: GPT-5.5 distills and evaluates, then local/remote worker models attempt the task. The launcher configures Ollama for worker models while leaving your real `OPENAI_API_KEY` available for the orchestrator. Tune the lineup with env vars:
 
 ```bash
@@ -72,7 +78,7 @@ notclaude-coinflip run "inspect this repo and propose the next benchmark"
 NOTCLAUDE_COINFLIP_MODEL=swarm notclaude-coinflip
 ```
 
-`notclaude-coinflip` does not run interactive setup during startup. Compute credentials must be provisioned before launch through the environment or `~/.notclaude/coinflip.env`, then normal usage is just:
+`notclaude-coinflip` does not run interactive setup during startup. Compute credentials must already be provisioned through the environment or `~/.notclaude/coinflip.env`, then normal usage is just:
 
 ```bash
 notclaude-coinflip

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Provision the local, git-ignored notclaude-coinflip compute config.
+
+set -euo pipefail
+
+CONFIG_DIR="${NOTCLAUDE_CONFIG_HOME:-$HOME/.notclaude}"
+CONFIG_FILE="${NOTCLAUDE_COINFLIP_CONFIG:-$CONFIG_DIR/coinflip.env}"
+DEFAULT_BASE_URL="https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  provision-notclaude-coinflip --key cc_your_api_key
+  COMPUTE_COMMUNITY_API_KEY=cc_your_api_key provision-notclaude-coinflip
+
+Options:
+  --key VALUE       Compute Community API key to save locally.
+  --config PATH     Config file path. Defaults to ~/.notclaude/coinflip.env.
+  --base-url URL    Compute endpoint base URL.
+  --help            Show this help.
+EOF
+}
+
+compute_key="${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}"
+base_url="${COMPUTE_QWEN36_BASE_URL:-${COMPUTE_COMMUNITY_QWEN_BASE_URL:-$DEFAULT_BASE_URL}}"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --key)
+      compute_key="${2:-}"
+      shift 2
+      ;;
+    --key=*)
+      compute_key="${1#--key=}"
+      shift
+      ;;
+    --config)
+      CONFIG_FILE="${2:-}"
+      CONFIG_DIR="$(dirname "$CONFIG_FILE")"
+      shift 2
+      ;;
+    --config=*)
+      CONFIG_FILE="${1#--config=}"
+      CONFIG_DIR="$(dirname "$CONFIG_FILE")"
+      shift
+      ;;
+    --base-url)
+      base_url="${2:-}"
+      shift 2
+      ;;
+    --base-url=*)
+      base_url="${1#--base-url=}"
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "provision-notclaude-coinflip: unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ -z "$compute_key" ]; then
+  echo "provision-notclaude-coinflip: missing Compute Community API key" >&2
+  echo "  Pass --key cc_your_api_key or set COMPUTE_COMMUNITY_API_KEY." >&2
+  exit 1
+fi
+
+mkdir -p "$CONFIG_DIR"
+umask 077
+{
+  printf 'COMPUTE_COMMUNITY_API_KEY=%s\n' "$compute_key"
+  printf 'COMPUTE_QWEN36_BASE_URL=%s\n' "$base_url"
+} >"$CONFIG_FILE"
+chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+
+echo "notclaude-coinflip compute config saved at $CONFIG_FILE"
+echo "Future launches: notclaude-coinflip"
