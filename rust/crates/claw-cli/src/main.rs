@@ -1166,12 +1166,28 @@ struct ManagedSessionSummary {
     message_count: usize,
 }
 
+/// Wrapper that gives `Box<dyn ApiClient + Send>` an `ApiClient` impl —
+/// we can't impl a foreign trait on a foreign type from the binary crate
+/// (orphan rule), so we wrap it. Lets `ConversationRuntime` hold either the
+/// direct `DefaultRuntimeClient` or the orchestrator-wrapped version through
+/// the same generic parameter.
+struct ApiClientHandle(Box<dyn runtime::ApiClient + Send>);
+
+impl runtime::ApiClient for ApiClientHandle {
+    fn stream(
+        &mut self,
+        request: runtime::ApiRequest,
+    ) -> Result<Vec<runtime::AssistantEvent>, runtime::RuntimeError> {
+        self.0.stream(request)
+    }
+}
+
 struct LiveCli {
     model: String,
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     system_prompt: Vec<String>,
-    runtime: ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>,
+    runtime: ConversationRuntime<ApiClientHandle, CliToolExecutor>,
     session: SessionHandle,
 }
 
@@ -3060,19 +3076,43 @@ fn build_runtime(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     progress_reporter: Option<InternalPromptProgressReporter>,
-) -> Result<ConversationRuntime<DefaultRuntimeClient, CliToolExecutor>, Box<dyn std::error::Error>>
+) -> Result<ConversationRuntime<ApiClientHandle, CliToolExecutor>, Box<dyn std::error::Error>>
 {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
+
+    // Detect swarm pseudo-models. They route through OrchestratorRuntime
+    // which (Phase 1) is a transparent wrapper that adds [role:coder] tags
+    // around a single inner DefaultRuntimeClient. Phase 3+ will replace the
+    // single inner with role-specific calls.
+    let is_swarm = matches!(model.as_str(), "swarm" | "notclaude-swarm");
+    let coder_model = if is_swarm {
+        // Phase 1 default: route the swarm path's coder role through the
+        // bench-proven 14B. Phase 3+ will pull this from RoleConfig.
+        "qwen2.5-coder:14b".to_string()
+    } else {
+        model.clone()
+    };
+
+    let inner_client = DefaultRuntimeClient::new(
+        coder_model,
+        enable_tools,
+        emit_output,
+        allowed_tools.clone(),
+        tool_registry.clone(),
+        progress_reporter,
+    )?;
+
+    let api_client: Box<dyn runtime::ApiClient + Send> = if is_swarm {
+        Box::new(orchestrator::OrchestratorRuntime::with_default_roles(
+            Box::new(inner_client),
+        ))
+    } else {
+        Box::new(inner_client)
+    };
+
     Ok(ConversationRuntime::new_with_features(
         session,
-        DefaultRuntimeClient::new(
-            model,
-            enable_tools,
-            emit_output,
-            allowed_tools.clone(),
-            tool_registry.clone(),
-            progress_reporter,
-        )?,
+        ApiClientHandle(api_client),
         CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
         permission_policy(permission_mode, &tool_registry),
         system_prompt,

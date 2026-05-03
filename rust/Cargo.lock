@@ -186,6 +186,7 @@ dependencies = [
  "commands",
  "compat-harness",
  "crossterm",
+ "orchestrator",
  "plugins",
  "pulldown-cmark",
  "reqwest",
