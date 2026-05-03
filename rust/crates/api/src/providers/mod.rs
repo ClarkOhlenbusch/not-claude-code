@@ -222,6 +222,51 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
         },
     ),
     (
+        "gemma",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        },
+    ),
+    (
+        "gemma4",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        },
+    ),
+    (
+        "gemma4-31b",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        },
+    ),
+    (
+        "runpod-gemma4-31b",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        },
+    ),
+    (
+        "google/gemma-4-31b-it",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        },
+    ),
+    (
         "qwen-coder",
         ProviderMetadata {
             provider: ProviderKind::Ollama,
@@ -250,24 +295,6 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
     ),
     (
         "glm-4.7-flash:q4",
-        ProviderMetadata {
-            provider: ProviderKind::Ollama,
-            auth_env: "OLLAMA_API_KEY",
-            base_url_env: "OLLAMA_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
-        },
-    ),
-    (
-        "gemma",
-        ProviderMetadata {
-            provider: ProviderKind::Ollama,
-            auth_env: "OLLAMA_API_KEY",
-            base_url_env: "OLLAMA_BASE_URL",
-            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
-        },
-    ),
-    (
-        "gemma4:26b",
         ProviderMetadata {
             provider: ProviderKind::Ollama,
             auth_env: "OLLAMA_API_KEY",
@@ -312,12 +339,14 @@ pub fn resolve_model_alias(model: &str) -> String {
                 },
                 ProviderKind::ComputeCommunity => match *alias {
                     "qwen36" | "qwen3.6" | "runpod-qwen36" => "Qwen/Qwen3.6-35B-A3B-FP8",
+                    "gemma" | "gemma4" | "gemma4-31b" | "runpod-gemma4-31b" => {
+                        "google/gemma-4-31B-it"
+                    }
                     _ => trimmed,
                 },
                 ProviderKind::Ollama => match *alias {
                     "qwen-coder" => "qwen3-coder:30b",
                     "glm-flash" => "glm-4.7-flash:q4",
-                    "gemma" => "gemma4:26b",
                     _ => trimmed,
                 },
             })
@@ -356,6 +385,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
         });
     }
+    if lower == "google/gemma-4-31b-it" {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_GEMMA4_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_GEMMA4_BASE_URL,
+        });
+    }
     if lower.contains(':') && !lower.starts_with("claude") {
         return Some(ProviderMetadata {
             provider: ProviderKind::Ollama,
@@ -389,6 +426,8 @@ pub fn max_tokens_for_model(model: &str) -> u32 {
     let canonical = resolve_model_alias(model);
     if canonical.eq_ignore_ascii_case("Qwen/Qwen3.6-35B-A3B-FP8") {
         16_000
+    } else if canonical.eq_ignore_ascii_case("google/gemma-4-31B-it") {
+        16_000
     } else if canonical.contains("opus") {
         32_000
     } else {
@@ -416,6 +455,19 @@ mod tests {
         );
         assert_eq!(
             detect_provider_kind("qwen36"),
+            ProviderKind::ComputeCommunity
+        );
+    }
+
+    #[test]
+    fn resolves_compute_gemma4_aliases() {
+        assert_eq!(resolve_model_alias("gemma"), "google/gemma-4-31B-it");
+        assert_eq!(
+            resolve_model_alias("runpod-gemma4-31b"),
+            "google/gemma-4-31B-it"
+        );
+        assert_eq!(
+            detect_provider_kind("gemma4-31b"),
             ProviderKind::ComputeCommunity
         );
     }

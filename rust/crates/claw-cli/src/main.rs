@@ -858,16 +858,15 @@ Aliases
   haiku            claude-haiku-4-5-20251213
   gpt              gpt-5.5                  (OpenAI · Codex login)
   qwen36           Qwen/Qwen3.6-35B-A3B-FP8  (Compute Community)
+  gemma            google/gemma-4-31B-it     (Compute Community)
   qwen-coder       qwen3-coder:30b           ({qwen_status})
   glm-flash        glm-4.7-flash:q4          ({glm_status})
-  gemma            gemma4:26b                ({gemma_status})
 
 Next
   /model           Open interactive picker
   /model <name>    Switch models for this REPL session",
         qwen_status = local_status("qwen3-coder:30b"),
         glm_status = local_status("glm-4.7-flash:q4"),
-        gemma_status = local_status("gemma4:26b"),
     )
 }
 
@@ -1399,6 +1398,7 @@ impl LiveCli {
             &mut stdout,
         )?;
         spinner.finish("", TerminalRenderer::new().color_theme(), &mut stdout)?;
+        let mut request_timer = RequestTimer::start_if_needed(&self.display_model_label());
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = self.runtime.run_turn(input, Some(&mut permission_prompter));
         match result {
@@ -1406,11 +1406,17 @@ impl LiveCli {
                 // The response stream may end on the current terminal line.
                 // Clearing the spinner here would erase short one-line answers.
                 writeln!(stdout)?;
+                if let Some(timer) = &mut request_timer {
+                    timer.finish_success(&mut stdout)?;
+                }
                 stdout.flush()?;
                 self.persist_session()?;
                 Ok(())
             }
             Err(error) => {
+                if let Some(timer) = &mut request_timer {
+                    timer.finish_failure(&mut stdout)?;
+                }
                 spinner.fail(
                     "❌ Request failed",
                     TerminalRenderer::new().color_theme(),
@@ -3224,6 +3230,24 @@ fn build_runtime(
     // around a single inner DefaultRuntimeClient. Phase 3+ will replace the
     // single inner with role-specific calls.
     let is_swarm = matches!(model.as_str(), "swarm" | "notclaude-swarm");
+    if is_swarm && env::var("NOTCLAUDE_COINFLIP_LAUNCHER").ok().as_deref() == Some("1") {
+        return Ok(ConversationRuntime::new_with_features(
+            session,
+            ApiClientHandle(Box::new(DefaultRuntimeClient::new(
+                model,
+                enable_tools,
+                emit_output,
+                allowed_tools.clone(),
+                tool_registry.clone(),
+                progress_reporter,
+            )?)),
+            CliToolExecutor::new(allowed_tools.clone(), emit_output, tool_registry.clone()),
+            permission_policy(permission_mode, &tool_registry),
+            system_prompt,
+            feature_config,
+        ));
+    }
+
     let swarm_roles = is_swarm.then(orchestrator::RoleConfig::from_env);
     let coder_model = if is_swarm {
         // Pull from RoleConfig so updates to the swarm's coder model live in
@@ -3482,6 +3506,102 @@ impl DefaultRuntimeClient {
     }
 }
 
+struct RequestTimer {
+    label: String,
+    started_at: Instant,
+    stop: Option<mpsc::Sender<()>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl RequestTimer {
+    fn start_if_needed(model_label: &str) -> Option<Self> {
+        should_show_request_timer(model_label).then(|| Self::start(model_label))
+    }
+
+    fn start(model_label: &str) -> Self {
+        let label = model_label.to_string();
+        let started_at = Instant::now();
+        let (stop, rx) = mpsc::channel();
+        let heartbeat_label = label.clone();
+        let handle = thread::spawn(move || {
+            let started_at = Instant::now();
+            loop {
+                match rx.recv_timeout(Duration::from_secs(1)) {
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => {
+                        let mut stdout = io::stdout();
+                        let _ = writeln!(
+                            stdout,
+                            "… {heartbeat_label} request · {} elapsed",
+                            format_request_elapsed(started_at.elapsed())
+                        );
+                        let _ = stdout.flush();
+                    }
+                }
+            }
+        });
+
+        Self {
+            label,
+            started_at,
+            stop: Some(stop),
+            handle: Some(handle),
+        }
+    }
+
+    fn finish_success(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.stop();
+        writeln!(
+            out,
+            "✔ {} request · completed in {}",
+            self.label,
+            format_request_elapsed(self.started_at.elapsed())
+        )
+    }
+
+    fn finish_failure(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.stop();
+        writeln!(
+            out,
+            "✘ {} request · failed after {}",
+            self.label,
+            format_request_elapsed(self.started_at.elapsed())
+        )
+    }
+
+    fn stop(&mut self) {
+        if let Some(sender) = self.stop.take() {
+            let _ = sender.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for RequestTimer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn should_show_request_timer(model_label: &str) -> bool {
+    matches!(model_label, "coinflip" | "swarm" | "notclaude-swarm")
+}
+
+fn format_request_elapsed(duration: Duration) -> String {
+    let total_millis = duration.as_millis();
+    if total_millis < 60_000 {
+        let tenths = (total_millis + 50) / 100;
+        return format!("{}.{:01}s", tenths / 10, tenths % 10);
+    }
+
+    let total_seconds = duration.as_secs();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}m {seconds:02}s")
+}
+
 fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
     Ok(resolve_startup_auth_source(|| {
         let cwd = env::current_dir().map_err(api::ApiError::from)?;
@@ -3508,7 +3628,7 @@ impl SwarmState {
         let orchestrator_model =
             env::var("NOTCLAUDE_SWARM_ORCHESTRATOR").unwrap_or_else(|_| "gpt-5.5".to_string());
         let worker_models = env::var("NOTCLAUDE_SWARM_MODELS")
-            .unwrap_or_else(|_| "runpod-qwen36,gemma4:e2b".to_string())
+            .unwrap_or_else(|_| "runpod-qwen36,runpod-gemma4-31b".to_string())
             .split(',')
             .map(str::trim)
             .filter(|model| !model.is_empty())
@@ -3524,7 +3644,7 @@ impl SwarmState {
             worker_models: if worker_models.is_empty() {
                 vec![
                     resolve_model_alias("runpod-qwen36"),
-                    resolve_model_alias("gemma4:e2b"),
+                    resolve_model_alias("runpod-gemma4-31b"),
                 ]
             } else {
                 worker_models
@@ -3546,7 +3666,7 @@ impl SwarmState {
             .find(|model| Some(*model) != self.last_failed_model.as_ref())
             .or_else(|| self.worker_models.first())
             .cloned()
-            .unwrap_or_else(|| "gemma4:26b".to_string())
+            .unwrap_or_else(|| resolve_model_alias("runpod-gemma4-31b"))
     }
 
     fn record_failure(&mut self, model: String, failure: String) {
@@ -5133,11 +5253,12 @@ mod tests {
         build_swarm_worker_request, describe_tool_progress, display_model_label, filter_tool_specs,
         format_compact_report, format_cost_report, format_internal_prompt_progress_line,
         format_model_report, format_model_switch_report, format_permissions_report,
-        format_permissions_switch_report, format_resume_report, format_status_report,
-        format_tool_call_start, format_tool_result, is_swarm_model, normalize_permission_mode,
-        parse_args, parse_git_status_metadata, permission_policy, print_help_to, push_output_block,
-        render_config_report, render_memory_report, render_repl_help, render_unknown_repl_command,
-        resolve_model_alias, response_to_events, resume_supported_slash_commands,
+        format_permissions_switch_report, format_request_elapsed, format_resume_report,
+        format_status_report, format_tool_call_start, format_tool_result, is_swarm_model,
+        normalize_permission_mode, parse_args, parse_git_status_metadata, permission_policy,
+        print_help_to, push_output_block, render_config_report, render_memory_report,
+        render_repl_help, render_unknown_repl_command, resolve_model_alias, response_to_events,
+        resume_supported_slash_commands, should_show_request_timer,
         slash_command_completion_candidates, status_context, CliAction, CliOutputFormat,
         InternalPromptProgressEvent, InternalPromptProgressState, PromptInput, SlashCommand,
         StatusUsage, SwarmState, DEFAULT_MODEL,
@@ -5338,6 +5459,11 @@ mod tests {
         assert_eq!(resolve_model_alias("coinflip"), "swarm");
         assert_eq!(resolve_model_alias("notclaude-coinflip"), "swarm");
         assert_eq!(resolve_model_alias("qwen36"), "Qwen/Qwen3.6-35B-A3B-FP8");
+        assert_eq!(resolve_model_alias("gemma"), "google/gemma-4-31B-it");
+        assert_eq!(
+            resolve_model_alias("runpod-gemma4-31b"),
+            "google/gemma-4-31B-it"
+        );
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
     }
 
@@ -5368,7 +5494,23 @@ mod tests {
         assert!(is_swarm_model("coinflip"));
         assert!(!is_swarm_model("gpt-5.5"));
         assert!(!is_swarm_model("Qwen/Qwen3.6-35B-A3B-FP8"));
-        assert!(!is_swarm_model("gemma4:e2b"));
+        assert!(!is_swarm_model("google/gemma-4-31B-it"));
+    }
+
+    #[test]
+    fn request_timer_is_shown_for_coinflip_and_swarm_labels() {
+        assert!(should_show_request_timer("coinflip"));
+        assert!(should_show_request_timer("swarm"));
+        assert!(should_show_request_timer("notclaude-swarm"));
+        assert!(!should_show_request_timer("claude-opus-4-6"));
+        assert!(!should_show_request_timer("Qwen/Qwen3.6-35B-A3B-FP8"));
+    }
+
+    #[test]
+    fn request_timer_formats_elapsed_duration() {
+        assert_eq!(format_request_elapsed(Duration::from_millis(40)), "0.0s");
+        assert_eq!(format_request_elapsed(Duration::from_millis(1_240)), "1.2s");
+        assert_eq!(format_request_elapsed(Duration::from_secs(65)), "1m 05s");
     }
 
     #[test]

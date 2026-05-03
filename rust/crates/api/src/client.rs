@@ -51,9 +51,16 @@ impl ProviderClient {
             ProviderKind::Ollama => Ok(Self::Ollama(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::ollama(),
             )?)),
-            ProviderKind::ComputeCommunity => Ok(Self::ComputeCommunity(
-                OpenAiCompatClient::from_env(OpenAiCompatConfig::compute_community_qwen())?,
-            )),
+            ProviderKind::ComputeCommunity => {
+                let config = if resolved_model.eq_ignore_ascii_case("google/gemma-4-31B-it") {
+                    OpenAiCompatConfig::compute_community_gemma4()
+                } else {
+                    OpenAiCompatConfig::compute_community_qwen()
+                };
+                Ok(Self::ComputeCommunity(OpenAiCompatClient::from_env(
+                    config,
+                )?))
+            }
         }
     }
 
@@ -138,6 +145,11 @@ pub fn read_xai_base_url() -> String {
 #[must_use]
 pub fn read_compute_community_qwen_base_url() -> String {
     openai_compat::read_base_url(OpenAiCompatConfig::compute_community_qwen())
+}
+
+#[must_use]
+pub fn read_compute_community_gemma4_base_url() -> String {
+    openai_compat::read_base_url(OpenAiCompatConfig::compute_community_gemma4())
 }
 
 #[cfg(test)]

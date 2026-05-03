@@ -84,7 +84,7 @@ NOTCLAUDE_COINFLIP_MODEL=swarm notclaude-coinflip
 notclaude-coinflip
 ```
 
-The default coinflip lineup is GPT-5.5 as orchestrator and `runpod-qwen36` as the compute worker. If compute credentials are missing, the launcher fails clearly instead of silently using GPT-only. To intentionally bypass compute and run GPT-only fallback:
+The default coinflip lineup is GPT-5.5 as orchestrator with both `runpod-qwen36` and `runpod-gemma4-31b` available as Compute Community workers. If compute credentials are missing, the launcher fails clearly instead of silently using GPT-only. To intentionally bypass compute and run GPT-only fallback:
 
 ```bash
 NOTCLAUDE_COINFLIP_ALLOW_GPT_FALLBACK=1 notclaude-coinflip
@@ -102,17 +102,21 @@ notclaude --model qwen3-coder:30b "summarize this repo"
 
 `qwen-coder` is an alias for `qwen3-coder:30b`. You can set `NOTCLAUDE_DEFAULT_MODEL=qwen-coder` if you want the remote Qwen model to be the default.
 
-### Runpod Qwen3.6 35B
+### Runpod Compute Models
 
-The Compute Community Runpod model is wired as an OpenAI-compatible endpoint:
+The Compute Community Runpod models are wired as OpenAI-compatible endpoints:
 
 ```bash
 notclaude-coinflip
 notclaude --model qwen36
 notclaude --model qwen3.6 "summarize this repo"
+notclaude --model gemma
+notclaude --model runpod-gemma4-31b "summarize this repo"
 ```
 
-Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. `notclaude-coinflip` reads `~/.notclaude/coinflip.env` automatically, and you can still use `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` if you want to override the saved key for a single shell.
+Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. Aliases `gemma`, `gemma4`, `gemma4-31b`, and `runpod-gemma4-31b` resolve to `google/gemma-4-31B-it` at `https://computecommunity.com/u/CTFaQ3cxUcRbXCpuqCASNw9Y5xrU0LdQ/nodes/runpod-gemma-4-31b/v1`. Both use the same `COMPUTE_COMMUNITY_API_KEY`; override the endpoints with `COMPUTE_COMMUNITY_QWEN_BASE_URL` or `COMPUTE_COMMUNITY_GEMMA4_BASE_URL`.
+
+`notclaude-coinflip` reads `~/.notclaude/coinflip.env` automatically, and you can still use `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` if you want to override the saved key for a single shell.
 
 ## Scriptable command-line runs
 
@@ -188,11 +192,11 @@ Practical model lineup:
 | Model | Footprint | Use |
 |---|---|---|
 | `qwen36` / `runpod-qwen36` | remote | preferred agentic default when a compute key is available |
-| `gemma4:e2b` | ~7 GB | local fallback for Intel Macs and quick offline checks |
+| `gemma` / `runpod-gemma4-31b` | remote | Compute Gemma4 31B worker alongside Qwen |
 | `qwen2.5-coder:14b` | ~9 GB | too slow for Intel Macs; use only on faster Apple Silicon or remote Ollama |
 | `nomic-embed-text:v1.5` | ~250 MB | future repo retrieval |
 
-On Intel Macs, avoid 14B local models for interactive use. Prefer Compute Qwen 3.6, or keep local testing to `gemma4:e2b`.
+On Intel Macs, avoid 14B local models for interactive use. Prefer the Compute Qwen 3.6 and Gemma4 31B endpoints.
 
 ## Future architecture (the project's thesis)
 

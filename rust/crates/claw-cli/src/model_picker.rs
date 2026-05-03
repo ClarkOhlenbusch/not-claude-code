@@ -80,9 +80,15 @@ const STATIC_ENTRIES: &[PickerEntry] = &[
     },
     PickerEntry {
         alias: "gemma",
-        canonical: "gemma4:26b",
-        kind: EntryKind::Ollama,
-        estimated_gb: Some(16.0),
+        canonical: "google/gemma-4-31B-it",
+        kind: EntryKind::Cloud,
+        estimated_gb: None,
+    },
+    PickerEntry {
+        alias: "runpod-gemma4-31b",
+        canonical: "google/gemma-4-31B-it",
+        kind: EntryKind::Cloud,
+        estimated_gb: None,
     },
 ];
 
