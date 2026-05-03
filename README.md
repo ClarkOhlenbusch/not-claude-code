@@ -20,26 +20,35 @@ Phase 0 — base harness routing local models end-to-end via Ollama.
 
 ## Quick start
 
-Prereqs: Rust 1.90+, Ollama, ~10 GB disk for the model.
+Prereqs: Rust 1.90+, Ollama (`brew install ollama`), ~5 GB disk for the model.
 
 ```bash
 git clone https://github.com/ClarkOhlenbusch/not-claude-code
-cd not-claude-code/rust
-cargo build
+cd not-claude-code
 
-# In another terminal:
-ollama serve
+# Build optimized binary
+(cd rust && cargo build --release)
 
-# First-time only — pull the workhorse model (~4.7 GB):
+# Install the wrapper command (creates ~/.local/bin/notclaude → scripts/notclaude)
+mkdir -p ~/.local/bin && ln -sf "$PWD/scripts/notclaude" ~/.local/bin/notclaude
+
+# Pull the default model (~4.7 GB, one-time)
 ollama pull qwen2.5-coder:7b
 
-# Test:
-OPENAI_API_KEY=ollama \
-OPENAI_BASE_URL=http://localhost:11434/v1 \
-./target/debug/claw --model qwen2.5-coder:7b "say hi in one short sentence"
+# Use it (Ollama auto-starts if not already running)
+notclaude "say hi"
+notclaude                              # interactive REPL
+notclaude --model some-other-model "…" # override default
 ```
 
-Expected output: `Hi there! How can I assist you today?`
+Make sure `~/.local/bin` is on your `$PATH` (it usually is on macOS).
+
+The `notclaude` wrapper sets `OPENAI_API_KEY=ollama`, `OPENAI_BASE_URL=http://localhost:11434/v1`, and defaults `--model` to `qwen2.5-coder:7b`. Equivalent without it:
+
+```bash
+OPENAI_API_KEY=ollama OPENAI_BASE_URL=http://localhost:11434/v1 \
+  ./rust/target/release/claw --model qwen2.5-coder:7b "say hi"
+```
 
 ## How the routing works
 

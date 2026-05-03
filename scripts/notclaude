@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# notclaude — local-first wrapper around `claw`.
+# Sets the env vars to point at Ollama, defaults --model to qwen2.5-coder:7b,
+# and ensures Ollama is running. Pass any claw args; --model overrides the default.
+
+set -euo pipefail
+
+# Path to the release binary, computed relative to this script's location so
+# it works whether installed via symlink to ~/.local/bin or run in place.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLAW_BIN="$REPO_ROOT/rust/target/release/claw"
+
+if [ ! -x "$CLAW_BIN" ]; then
+  echo "notclaude: binary not found at $CLAW_BIN" >&2
+  echo "  build it first: cd $REPO_ROOT/rust && cargo build --release" >&2
+  exit 1
+fi
+
+DEFAULT_MODEL="qwen2.5-coder:7b"
+OLLAMA_URL="http://localhost:11434"
+
+# Start Ollama if not running. Silent unless we have to spin it up.
+if ! curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null; then
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "notclaude: ollama not installed (install with: brew install ollama)" >&2
+    exit 1
+  fi
+  echo "notclaude: starting ollama server..." >&2
+  ollama serve >/dev/null 2>&1 &
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 0.3
+    curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null && break
+  done
+fi
+
+# Verify default model is pulled (only check if user didn't override --model).
+HAS_MODEL_FLAG=0
+for arg in "$@"; do
+  case "$arg" in
+    --model|--model=*) HAS_MODEL_FLAG=1; break ;;
+  esac
+done
+
+if [ "$HAS_MODEL_FLAG" -eq 0 ]; then
+  if ! curl -sf "$OLLAMA_URL/api/tags" 2>/dev/null | grep -q "\"$DEFAULT_MODEL\""; then
+    echo "notclaude: default model $DEFAULT_MODEL not pulled" >&2
+    echo "  pull it with: ollama pull $DEFAULT_MODEL" >&2
+    exit 1
+  fi
+  set -- --model "$DEFAULT_MODEL" "$@"
+fi
+
+exec env \
+  OPENAI_API_KEY=ollama \
+  OPENAI_BASE_URL="$OLLAMA_URL/v1" \
+  "$CLAW_BIN" "$@"
