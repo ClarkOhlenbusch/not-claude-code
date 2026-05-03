@@ -1,5 +1,7 @@
 mod init;
 mod input;
+mod model_picker;
+mod ollama;
 mod render;
 
 use std::collections::BTreeSet;
@@ -385,13 +387,12 @@ fn format_direct_slash_command_error(command: &str, is_unknown: bool) -> String 
     lines.join("\n")
 }
 
-fn resolve_model_alias(model: &str) -> &str {
-    match model {
-        "opus" => "claude-opus-4-6",
-        "sonnet" => "claude-sonnet-4-6",
-        "haiku" => "claude-haiku-4-5-20251213",
-        _ => model,
-    }
+fn resolve_model_alias(model: &str) -> String {
+    api::resolve_model_alias(model)
+}
+
+fn is_ollama_target(model: &str) -> bool {
+    matches!(api::detect_provider_kind(model), api::ProviderKind::Ollama)
 }
 
 fn normalize_allowed_tools(values: &[String]) -> Result<Option<AllowedToolSet>, String> {
@@ -744,6 +745,14 @@ struct StatusUsage {
 }
 
 fn format_model_report(model: &str, message_count: usize, turns: u32) -> String {
+    let installed = ollama::list_pulled().unwrap_or_default();
+    let local_status = |canonical: &str| -> String {
+        installed
+            .iter()
+            .find(|m| m.name == canonical)
+            .map(|m| format!("ready · {}", ollama::format_bytes(m.size_bytes)))
+            .unwrap_or_else(|| "pull on switch".to_string())
+    };
     format!(
         "Model
   Current          {model}
@@ -753,13 +762,16 @@ Aliases
   opus             claude-opus-4-6
   sonnet           claude-sonnet-4-6
   haiku            claude-haiku-4-5-20251213
-  qwen-coder       qwen3-coder:30b           (local · Ollama)
-  glm-flash        glm-4.7-flash:q4          (local · Ollama)
-  gemma            gemma4:26b                (local · Ollama)
+  qwen-coder       qwen3-coder:30b           ({qwen_status})
+  glm-flash        glm-4.7-flash:q4          ({glm_status})
+  gemma            gemma4:26b                ({gemma_status})
 
 Next
-  /model           Show the current model
-  /model <name>    Switch models for this REPL session"
+  /model           Open interactive picker
+  /model <name>    Switch models for this REPL session",
+        qwen_status = local_status("qwen3-coder:30b"),
+        glm_status = local_status("glm-4.7-flash:q4"),
+        gemma_status = local_status("gemma4:26b"),
     )
 }
 
@@ -1444,19 +1456,25 @@ impl LiveCli {
     }
 
     fn set_model(&mut self, model: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some(model) = model else {
-            println!(
-                "{}",
-                format_model_report(
-                    &self.model,
-                    self.runtime.session().messages.len(),
-                    self.runtime.usage().turns(),
-                )
-            );
-            return Ok(false);
+        let raw_target = match model {
+            Some(value) => value,
+            None => match model_picker::run(&self.model)? {
+                model_picker::PickerOutcome::Selected(value) => value,
+                model_picker::PickerOutcome::Cancelled => {
+                    println!(
+                        "{}",
+                        format_model_report(
+                            &self.model,
+                            self.runtime.session().messages.len(),
+                            self.runtime.usage().turns(),
+                        )
+                    );
+                    return Ok(false);
+                }
+            },
         };
 
-        let model = resolve_model_alias(&model).to_string();
+        let model = resolve_model_alias(&raw_target).to_string();
 
         if model == self.model {
             println!(
@@ -1468,6 +1486,14 @@ impl LiveCli {
                 )
             );
             return Ok(false);
+        }
+
+        if is_ollama_target(&model) && !ollama::is_installed(&model) {
+            println!("Pulling {model} (not installed locally)");
+            if let Err(e) = ollama::pull_with_progress(&model, std::io::stdout()) {
+                eprintln!("model switch aborted: {e}");
+                return Ok(false);
+            }
         }
 
         let previous = self.model.clone();
