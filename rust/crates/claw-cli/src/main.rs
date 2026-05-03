@@ -1105,59 +1105,24 @@ impl LiveCli {
             || "<unknown>".to_string(),
             |path| path.display().to_string(),
         );
-        let workspace_name = cwd
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("workspace");
-        let git_branch = status_context(Some(&self.session.path))
-            .ok()
-            .and_then(|context| context.git_branch);
-        let workspace_summary = git_branch.as_deref().map_or_else(
-            || workspace_name.to_string(),
-            |branch| format!("{workspace_name} · {branch}"),
-        );
         let has_claw_md = cwd
             .as_ref()
-            .is_some_and(|path| path.join("CLAW.md").is_file());
-        let mut lines = vec![
-            format!(
-                "{} {}",
-                if color {
-                    "\x1b[38;2;217;119;87m✻\x1b[0m \x1b[1;38;2;185;28;28mNOT\x1b[0m \x1b[1;38;2;217;119;87mClaude Code\x1b[0m"
-                } else {
-                    "✻ NOT Claude Code"
-                },
-                if color {
-                    "\x1b[2m· ready\x1b[0m"
-                } else {
-                    "· ready"
-                }
-            ),
-            format!("  Workspace        {workspace_summary}"),
-            format!("  Directory        {cwd_display}"),
-            format!("  Model            {}", self.model),
-            format!("  Permissions      {}", self.permission_mode.as_str()),
-            format!("  Session          {}", self.session.id),
-            format!(
-                "  Quick start      {}",
-                if has_claw_md {
-                    "/help · /status · ask for a task"
-                } else {
-                    "/init · /help · /status"
-                }
-            ),
-            "  Editor           Tab completes slash commands · /vim toggles modal editing"
-                .to_string(),
-            "  Multiline        Shift+Enter or Ctrl+J inserts a newline".to_string(),
-        ];
-        if !has_claw_md {
-            lines.push(
-                "  First run        /init scaffolds CLAW.md, .claw.json, and local session files"
-                    .to_string(),
-            );
-        }
-        lines.join("\n")
+            .is_some_and(|path| path.join("NOTCLAUDE.md").is_file());
+        let username = env::var("USER")
+            .or_else(|_| env::var("USERNAME"))
+            .unwrap_or_else(|_| "there".to_string());
+        let term_width = crossterm::terminal::size()
+            .map(|(cols, _)| cols as usize)
+            .unwrap_or(100)
+            .clamp(80, 120);
+        render_banner_box(BannerInputs {
+            color,
+            term_width,
+            username: &username,
+            model: &self.model,
+            cwd: &cwd_display,
+            has_claw_md,
+        })
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1859,7 +1824,7 @@ impl LiveCli {
 
 fn sessions_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let cwd = env::current_dir()?;
-    let path = cwd.join(".claw").join("sessions");
+    let path = cwd.join(".notclaude").join("sessions");
     fs::create_dir_all(&path)?;
     Ok(path)
 }
@@ -3364,6 +3329,266 @@ fn edit_distance(left: &str, right: &str) -> usize {
     previous[right_chars.len()]
 }
 
+// ── Startup banner rendering (Claude Code-style two-column box) ──────────
+
+struct BannerInputs<'a> {
+    color: bool,
+    term_width: usize,
+    username: &'a str,
+    model: &'a str,
+    cwd: &'a str,
+    has_claw_md: bool,
+}
+
+/// Visible (printable) width of `s`, ignoring ANSI escape sequences. Treats
+/// each Unicode scalar value as width 1; that's wrong for full-width CJK but
+/// fine for everything we render in the banner.
+fn visible_width(s: &str) -> usize {
+    let mut count = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if in_escape {
+            if c.is_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        count += 1;
+    }
+    count
+}
+
+/// Pad or truncate `s` so its visible width is exactly `width`. Truncation
+/// is byte-naive on the visible-portion budget — fine for ASCII, will cut a
+/// multi-byte char in half if you're unlucky, but the banner only shows ASCII
+/// + a few Unicode block chars so it's safe in practice.
+fn pad_visible(s: &str, width: usize) -> String {
+    let vw = visible_width(s);
+    if vw >= width {
+        // Truncate visible portion. Walk chars and cut once we hit budget.
+        let mut out = String::new();
+        let mut count = 0;
+        let mut in_escape = false;
+        for c in s.chars() {
+            if in_escape {
+                out.push(c);
+                if c.is_alphabetic() {
+                    in_escape = false;
+                }
+                continue;
+            }
+            if c == '\x1b' {
+                in_escape = true;
+                out.push(c);
+                continue;
+            }
+            if count >= width {
+                break;
+            }
+            out.push(c);
+            count += 1;
+        }
+        out
+    } else {
+        let mut out = s.to_string();
+        for _ in 0..(width - vw) {
+            out.push(' ');
+        }
+        out
+    }
+}
+
+/// Center `s` inside a column of `width`. ANSI-aware.
+fn center_visible(s: &str, width: usize) -> String {
+    let vw = visible_width(s);
+    if vw >= width {
+        return pad_visible(s, width);
+    }
+    let total_pad = width - vw;
+    let left = total_pad / 2;
+    let right = total_pad - left;
+    let mut out = String::new();
+    for _ in 0..left {
+        out.push(' ');
+    }
+    out.push_str(s);
+    for _ in 0..right {
+        out.push(' ');
+    }
+    out
+}
+
+fn truncate_path_display(path: &str, max: usize) -> String {
+    // Prefer ~/ for $HOME, then truncate from the front by collapsing
+    // leading path segments (so the trailing repo/dir name stays intact).
+    let home = env::var("HOME").unwrap_or_default();
+    let with_tilde = if !home.is_empty() && path.starts_with(&home) {
+        format!("~{}", &path[home.len()..])
+    } else {
+        path.to_string()
+    };
+    if visible_width(&with_tilde) <= max {
+        return with_tilde;
+    }
+    // Drop leading segments until it fits, prefixing with `…`.
+    let segments: Vec<&str> = with_tilde.split('/').collect();
+    for keep in (1..segments.len()).rev() {
+        let candidate = format!("…/{}", segments[segments.len() - keep..].join("/"));
+        if visible_width(&candidate) <= max {
+            return candidate;
+        }
+    }
+    // Last resort: char-truncate the tail.
+    let chars: Vec<char> = with_tilde.chars().collect();
+    let take = max.saturating_sub(1);
+    let start = chars.len().saturating_sub(take);
+    let mut out = String::from("…");
+    out.extend(chars[start..].iter());
+    out
+}
+
+fn render_banner_box(inputs: BannerInputs) -> String {
+    // Color helpers
+    let orange = if inputs.color { "\x1b[38;2;217;119;87m" } else { "" };
+    let bold_orange = if inputs.color { "\x1b[1;38;2;217;119;87m" } else { "" };
+    let bold_red = if inputs.color { "\x1b[1;38;2;185;28;28m" } else { "" };
+    let dim = if inputs.color { "\x1b[2m" } else { "" };
+    let reset = if inputs.color { "\x1b[0m" } else { "" };
+    let border = if inputs.color { "\x1b[2m" } else { "" };
+
+    let inner_width = inputs.term_width.saturating_sub(2);
+    // Layout: │ <left> │ <right> │  →  inner = 1+left+1+1+1+right+1
+    // Net column space available = inner_width - 5
+    let columns_total = inner_width.saturating_sub(5);
+    let left_width = (columns_total * 55 / 100).max(30);
+    let right_width = columns_total.saturating_sub(left_width);
+
+    // Title segment (visible) and the rest of the dashes
+    let title_visible = format!(" NOT Claude Code v{VERSION} ");
+    let title_styled = if inputs.color {
+        format!(
+            " {bold_red}NOT{reset} {bold_orange}Claude Code{reset} {dim}v{VERSION}{reset} "
+        )
+    } else {
+        title_visible.clone()
+    };
+    let title_w = visible_width(&title_visible);
+    let dash_left = 3usize;
+    let dash_right = inner_width.saturating_sub(title_w + dash_left);
+
+    let mut out = String::new();
+    // Top border with title
+    out.push_str(border);
+    out.push('╭');
+    for _ in 0..dash_left {
+        out.push('─');
+    }
+    out.push_str(reset);
+    out.push_str(&title_styled);
+    out.push_str(border);
+    for _ in 0..dash_right {
+        out.push('─');
+    }
+    out.push('╮');
+    out.push_str(reset);
+    out.push('\n');
+
+    // Compose left-column lines
+    let cwd_short = truncate_path_display(inputs.cwd, left_width.saturating_sub(2));
+    let logo = build_anthropic_asterisk(orange, reset);
+    let model_line = format!(
+        "{dim}model{reset} {bold_orange}{}{reset}",
+        inputs.model
+    );
+    let cwd_line = format!("{dim}cwd{reset}   {}", cwd_short);
+    let mut left: Vec<String> = vec![
+        String::new(),
+        center_visible(
+            &format!("Welcome back {bold_red}{}{reset}!", inputs.username),
+            left_width,
+        ),
+        String::new(),
+    ];
+    for line in &logo {
+        left.push(center_visible(line, left_width));
+    }
+    left.push(String::new());
+    left.push(format!("  {model_line}"));
+    left.push(format!("  {cwd_line}"));
+
+    // Compose right-column lines (tips + what's new)
+    let mut right: Vec<String> = vec![
+        format!("{bold_orange}Tips for getting started{reset}"),
+        if inputs.has_claw_md {
+            format!("{dim}/help{reset} for slash commands")
+        } else {
+            format!("{dim}/init{reset} to scaffold NOTCLAUDE.md")
+        },
+        format!("{dim}/status{reset} for session state"),
+        format!("{dim}Tab{reset} completes slash commands"),
+        format!("{dim}{}{reset}", "─".repeat(right_width.min(40))),
+        format!("{bold_orange}What's new{reset}"),
+        "Tool dispatch from local models".to_string(),
+        "Visual rebrand to NOT Claude Code".to_string(),
+        "Single-cmd launch via notclaude".to_string(),
+        format!("{dim}git log for more{reset}"),
+    ];
+
+    // Body rows
+    let max_h = left.len().max(right.len());
+    while left.len() < max_h {
+        left.push(String::new());
+    }
+    while right.len() < max_h {
+        right.push(String::new());
+    }
+    for i in 0..max_h {
+        out.push_str(border);
+        out.push('│');
+        out.push_str(reset);
+        out.push(' ');
+        out.push_str(&pad_visible(&left[i], left_width));
+        out.push(' ');
+        out.push_str(border);
+        out.push('│');
+        out.push_str(reset);
+        out.push(' ');
+        out.push_str(&pad_visible(&right[i], right_width));
+        out.push(' ');
+        out.push_str(border);
+        out.push('│');
+        out.push_str(reset);
+        out.push('\n');
+    }
+
+    // Bottom border
+    out.push_str(border);
+    out.push('╰');
+    for _ in 0..inner_width {
+        out.push('─');
+    }
+    out.push('╯');
+    out.push_str(reset);
+    out
+}
+
+/// Anthropic-style asterisk in Unicode quadrant block characters. Roughly
+/// matches Claude Code's compact LogoV2 glyph.
+fn build_anthropic_asterisk(orange: &str, reset: &str) -> Vec<String> {
+    [
+        "▗ ▗   ▖ ▖",
+        "         ",
+        "  ▘▘ ▝▝  ",
+    ]
+    .iter()
+    .map(|line| format!("{orange}{line}{reset}"))
+    .collect()
+}
+
 fn format_tool_call_start(name: &str, input: &str) -> String {
     let parsed: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::String(input.to_string()));
@@ -4104,7 +4329,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  notclaude init                         Scaffold CLAW.md + local files"
+        "  notclaude init                         Scaffold NOTCLAUDE.md + local files"
     )?;
     writeln!(out)?;
     writeln!(out, "Flags")?;
@@ -4793,7 +5018,7 @@ mod tests {
     #[test]
     fn init_template_mentions_detected_rust_workspace() {
         let rendered = crate::init::render_init_claw_md(std::path::Path::new("."));
-        assert!(rendered.contains("# CLAW.md"));
+        assert!(rendered.contains("# NOTCLAUDE.md"));
         assert!(rendered.contains("cargo clippy --workspace --all-targets -- -D warnings"));
     }
 

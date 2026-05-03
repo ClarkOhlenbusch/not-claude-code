@@ -9,7 +9,7 @@ set -euo pipefail
 # it works whether installed via symlink to ~/.local/bin or run in place.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CLAW_BIN="$REPO_ROOT/rust/target/release/claw"
+CLAW_BIN="$REPO_ROOT/rust/target/release/notclaude"
 
 if [ ! -x "$CLAW_BIN" ]; then
   echo "notclaude: binary not found at $CLAW_BIN" >&2

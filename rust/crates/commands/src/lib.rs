@@ -154,7 +154,7 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     SlashCommandSpec {
         name: "init",
         aliases: &[],
-        summary: "Create a starter CLAW.md for this repo",
+        summary: "Create a starter NOTCLAUDE.md for this repo",
         argument_hint: None,
         resume_supported: true,
         category: SlashCommandCategory::Workspace,
@@ -637,10 +637,10 @@ impl DefinitionSource {
     fn label(self) -> &'static str {
         match self {
             Self::ProjectCodex => "Project (.codex)",
-            Self::ProjectClaw => "Project (.claw)",
+            Self::ProjectClaw => "Project (.notclaude)",
             Self::UserCodexHome => "User ($CODEX_HOME)",
             Self::UserCodex => "User (~/.codex)",
-            Self::UserClaw => "User (~/.claw)",
+            Self::UserClaw => "User (~/.notclaude)",
         }
     }
 }
@@ -1272,7 +1272,7 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
         push_unique_root(
             &mut roots,
             DefinitionSource::ProjectClaw,
-            ancestor.join(".claw").join(leaf),
+            ancestor.join(".notclaude").join(leaf),
         );
     }
 
@@ -1294,7 +1294,7 @@ fn discover_definition_roots(cwd: &Path, leaf: &str) -> Vec<(DefinitionSource, P
         push_unique_root(
             &mut roots,
             DefinitionSource::UserClaw,
-            home.join(".claw").join(leaf),
+            home.join(".notclaude").join(leaf),
         );
     }
 
@@ -1314,7 +1314,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::ProjectClaw,
-            ancestor.join(".claw").join("skills"),
+            ancestor.join(".notclaude").join("skills"),
             SkillOrigin::SkillsDir,
         );
         push_unique_skill_root(
@@ -1326,7 +1326,7 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::ProjectClaw,
-            ancestor.join(".claw").join("commands"),
+            ancestor.join(".notclaude").join("commands"),
             SkillOrigin::LegacyCommandsDir,
         );
     }
@@ -1364,13 +1364,13 @@ fn discover_skill_roots(cwd: &Path) -> Vec<SkillRoot> {
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserClaw,
-            home.join(".claw").join("skills"),
+            home.join(".notclaude").join("skills"),
             SkillOrigin::SkillsDir,
         );
         push_unique_skill_root(
             &mut roots,
             DefinitionSource::UserClaw,
-            home.join(".claw").join("commands"),
+            home.join(".notclaude").join("commands"),
             SkillOrigin::LegacyCommandsDir,
         );
     }
@@ -1710,7 +1710,7 @@ fn render_agents_usage(unexpected: Option<&str>) -> String {
         "Agents".to_string(),
         "  Usage            /agents".to_string(),
         "  Direct CLI       claw agents".to_string(),
-        "  Sources          .codex/agents, .claw/agents, $CODEX_HOME/agents".to_string(),
+        "  Sources          .codex/agents, .notclaude/agents, $CODEX_HOME/agents".to_string(),
     ];
     if let Some(args) = unexpected {
         lines.push(format!("  Unexpected       {args}"));
@@ -1723,7 +1723,7 @@ fn render_skills_usage(unexpected: Option<&str>) -> String {
         "Skills".to_string(),
         "  Usage            /skills".to_string(),
         "  Direct CLI       claw skills".to_string(),
-        "  Sources          .codex/skills, .claw/skills, legacy /commands".to_string(),
+        "  Sources          .codex/skills, .notclaude/skills, legacy /commands".to_string(),
     ];
     if let Some(args) = unexpected {
         lines.push(format!("  Unexpected       {args}"));
@@ -1904,9 +1904,9 @@ mod tests {
     }
 
     fn write_external_plugin(root: &Path, name: &str, version: &str) {
-        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join(".notclaude-plugin")).expect("manifest dir");
         fs::write(
-            root.join(".claw-plugin").join("plugin.json"),
+            root.join(".notclaude-plugin").join("plugin.json"),
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"commands plugin\"\n}}"
             ),
@@ -1915,9 +1915,9 @@ mod tests {
     }
 
     fn write_bundled_plugin(root: &Path, name: &str, version: &str, default_enabled: bool) {
-        fs::create_dir_all(root.join(".claw-plugin")).expect("manifest dir");
+        fs::create_dir_all(root.join(".notclaude-plugin")).expect("manifest dir");
         fs::write(
-            root.join(".claw-plugin").join("plugin.json"),
+            root.join(".notclaude-plugin").join("plugin.json"),
             format!(
                 "{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\",\n  \"description\": \"bundled commands plugin\",\n  \"defaultEnabled\": {}\n}}",
                 if default_enabled { "true" } else { "false" }
@@ -2358,7 +2358,7 @@ mod tests {
     fn lists_skills_from_project_and_user_roots() {
         let workspace = temp_dir("skills-workspace");
         let project_skills = workspace.join(".codex").join("skills");
-        let project_commands = workspace.join(".claw").join("commands");
+        let project_commands = workspace.join(".notclaude").join("commands");
         let user_home = temp_dir("skills-home");
         let user_skills = user_home.join(".codex").join("skills");
 
@@ -2391,7 +2391,7 @@ mod tests {
         assert!(report.contains("3 available skills"));
         assert!(report.contains("Project (.codex):"));
         assert!(report.contains("plan · Project planning guidance"));
-        assert!(report.contains("Project (.claw):"));
+        assert!(report.contains("Project (.notclaude):"));
         assert!(report.contains("deploy · Legacy deployment guidance · legacy /commands"));
         assert!(report.contains("User (~/.codex):"));
         assert!(report.contains("(shadowed by Project (.codex)) plan · User planning guidance"));
