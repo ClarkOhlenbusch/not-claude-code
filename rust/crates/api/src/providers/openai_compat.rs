@@ -296,6 +296,21 @@ impl OpenAiSseParser {
     }
 }
 
+/// Some OpenAI-compatible servers (Ollama + Qwen, e.g.) don't emit structured
+/// `tool_calls` for tool-trained models — they emit the call as JSON in the
+/// text content. We buffer text that starts with `{` and try to parse it as a
+/// tool call on stream finish, synthesizing the `tool_use` events the rest of
+/// claw expects.
+#[derive(Debug, PartialEq, Eq)]
+enum TextBufferMode {
+    /// Haven't seen the first non-whitespace char yet — decide on first non-WS.
+    Pending,
+    /// First non-WS char was `{` — accumulating to attempt tool-call parse on finish.
+    Buffering,
+    /// First non-WS char was something else — pass text deltas through normally.
+    PassThrough,
+}
+
 #[derive(Debug)]
 struct StreamState {
     model: String,
@@ -306,6 +321,9 @@ struct StreamState {
     stop_reason: Option<String>,
     usage: Option<Usage>,
     tool_calls: BTreeMap<u32, ToolCallState>,
+    text_buffer: String,
+    buffer_mode: TextBufferMode,
+    synthesized_tool_use: bool,
 }
 
 impl StreamState {
@@ -319,6 +337,9 @@ impl StreamState {
             stop_reason: None,
             usage: None,
             tool_calls: BTreeMap::new(),
+            text_buffer: String::new(),
+            buffer_mode: TextBufferMode::Pending,
+            synthesized_tool_use: false,
         }
     }
 
@@ -357,19 +378,7 @@ impl StreamState {
 
         for choice in chunk.choices {
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
-                if !self.text_started {
-                    self.text_started = true;
-                    events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-                        index: 0,
-                        content_block: OutputContentBlock::Text {
-                            text: String::new(),
-                        },
-                    }));
-                }
-                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-                    index: 0,
-                    delta: ContentBlockDelta::TextDelta { text: content },
-                }));
+                self.handle_text_delta(content, &mut events);
             }
 
             for tool_call in choice.delta.tool_calls {
@@ -413,6 +422,116 @@ impl StreamState {
         Ok(events)
     }
 
+    /// Route text deltas through buffer-mode logic so we can detect & synthesize
+    /// tool calls that the upstream server emitted as text JSON.
+    fn handle_text_delta(&mut self, content: String, events: &mut Vec<StreamEvent>) {
+        // Once we've decided pass-through, fast path.
+        if self.buffer_mode == TextBufferMode::PassThrough {
+            self.emit_text_start_if_needed(events);
+            events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::TextDelta { text: content },
+            }));
+            return;
+        }
+        // In buffer or pending mode — accumulate first, then decide.
+        self.text_buffer.push_str(&content);
+        if self.buffer_mode == TextBufferMode::Pending {
+            let trimmed_start = self.text_buffer.trim_start();
+            if trimmed_start.is_empty() {
+                return; // still all whitespace; wait for more
+            }
+            // First non-WS chunk decides the mode. We buffer if it looks like
+            // a JSON object OR a markdown code fence (Qwen often wraps tool
+            // calls in ```json ... ```).
+            self.buffer_mode = if trimmed_start.starts_with('{')
+                || trimmed_start.starts_with("```")
+            {
+                TextBufferMode::Buffering
+            } else {
+                TextBufferMode::PassThrough
+            };
+            if self.buffer_mode == TextBufferMode::PassThrough {
+                // Drain whatever we buffered as a normal text delta.
+                let drained = std::mem::take(&mut self.text_buffer);
+                self.emit_text_start_if_needed(events);
+                events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                    index: 0,
+                    delta: ContentBlockDelta::TextDelta { text: drained },
+                }));
+            }
+            // If Buffering, just keep accumulating — emit on finish().
+        }
+    }
+
+    fn emit_text_start_if_needed(&mut self, events: &mut Vec<StreamEvent>) {
+        if !self.text_started {
+            self.text_started = true;
+            events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                index: 0,
+                content_block: OutputContentBlock::Text {
+                    text: String::new(),
+                },
+            }));
+        }
+    }
+
+    /// If we buffered text that started with `{` or a code fence, try to
+    /// extract a tool call. Returns true if synthesis succeeded (caller should
+    /// skip text emission).
+    fn try_synthesize_tool_use(&mut self, events: &mut Vec<StreamEvent>) -> bool {
+        if self.buffer_mode != TextBufferMode::Buffering || self.text_buffer.is_empty() {
+            return false;
+        }
+        let cleaned = strip_code_fences(self.text_buffer.trim());
+        // If the buffer didn't actually start with a code fence (just `{`),
+        // strip_code_fences returns the input unchanged — that's fine.
+        let Ok(value) = serde_json::from_str::<Value>(cleaned) else {
+            return false;
+        };
+        // Accept either {"name":"...","arguments":{...}} (Qwen / common shape)
+        // or {"function":"...","arguments":{...}} or {"name":"...","parameters":{...}}.
+        let name = value
+            .get("name")
+            .or_else(|| value.get("function"))
+            .and_then(Value::as_str);
+        let args = value
+            .get("arguments")
+            .or_else(|| value.get("parameters"))
+            .or_else(|| value.get("args"));
+        let (Some(name), Some(args)) = (name, args) else {
+            return false;
+        };
+        let id = format!(
+            "call_synth_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+            index: 0,
+            content_block: OutputContentBlock::ToolUse {
+                id,
+                name: name.to_string(),
+                input: Value::Object(serde_json::Map::new()),
+            },
+        }));
+        events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+            index: 0,
+            delta: ContentBlockDelta::InputJsonDelta {
+                partial_json: args.to_string(),
+            },
+        }));
+        events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+            index: 0,
+        }));
+        self.synthesized_tool_use = true;
+        self.stop_reason = Some("tool_use".to_string());
+        self.text_buffer.clear();
+        true
+    }
+
     fn finish(&mut self) -> Result<Vec<StreamEvent>, ApiError> {
         if self.finished {
             return Ok(Vec::new());
@@ -420,6 +539,19 @@ impl StreamState {
         self.finished = true;
 
         let mut events = Vec::new();
+
+        // First, attempt tool-call synthesis from buffered text.
+        let synthesized = self.try_synthesize_tool_use(&mut events);
+        // If buffering didn't yield a tool call, flush whatever we buffered as text.
+        if !synthesized && !self.text_buffer.is_empty() {
+            let drained = std::mem::take(&mut self.text_buffer);
+            self.emit_text_start_if_needed(&mut events);
+            events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                index: 0,
+                delta: ContentBlockDelta::TextDelta { text: drained },
+            }));
+        }
+
         if self.text_started && !self.text_finished {
             self.text_finished = true;
             events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
@@ -917,6 +1049,21 @@ fn normalize_finish_reason(value: &str) -> String {
         other => other,
     }
     .to_string()
+}
+
+/// Strip surrounding ```json ... ``` (or plain ``` ... ```) fences so we can
+/// parse the inner JSON. Models often wrap tool-call JSON in markdown.
+fn strip_code_fences(input: &str) -> &str {
+    let trimmed = input.trim();
+    let Some(stripped) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    // Drop optional language tag on the first line (```json, ```yaml, etc.)
+    let after_lang = match stripped.find('\n') {
+        Some(idx) => &stripped[idx + 1..],
+        None => stripped,
+    };
+    after_lang.strip_suffix("```").unwrap_or(after_lang).trim()
 }
 
 trait StringExt {
