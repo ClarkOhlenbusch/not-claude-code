@@ -24,7 +24,9 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use runtime::{ApiClient, ApiRequest, AssistantEvent, ConversationMessage, ContentBlock, RuntimeError};
+use runtime::{
+    ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, RuntimeError,
+};
 
 use crate::events::prepend_role_banner;
 use crate::intent::{self, Intent};
@@ -72,10 +74,7 @@ impl OrchestratorRuntime {
     }
 
     /// Phase 3+ active mode: enables planner pre-pass and reviewer retry loop.
-    pub fn with_orchestration_enabled(
-        inner: Box<dyn ApiClient + Send>,
-        roles: RoleConfig,
-    ) -> Self {
+    pub fn with_orchestration_enabled(inner: Box<dyn ApiClient + Send>, roles: RoleConfig) -> Self {
         Self {
             inner,
             roles,
@@ -153,7 +152,10 @@ impl ApiClient for OrchestratorRuntime {
                 let outcome = reviewer::review(&self.roles, &spec, &summary);
                 if let ReviewOutcome::Fail { reason } = outcome {
                     self.state.retries_used += 1;
-                    eprintln!("\n[role:reviewer] retry {}/{}: {}\n", self.state.retries_used, MAX_RETRIES_PER_TURN, reason);
+                    eprintln!(
+                        "\n[role:reviewer] retry {}/{}: {}\n",
+                        self.state.retries_used, MAX_RETRIES_PER_TURN, reason
+                    );
                     // Append critique to the request and re-run inner.
                     let mut retry_request = augmented_request;
                     retry_request.messages.push(ConversationMessage::user_text(
@@ -258,10 +260,8 @@ mod tests {
     #[test]
     fn active_mode_skips_planning_when_no_user_message() {
         let inner = ScriptedClient::new(vec![vec![AssistantEvent::TextDelta("hi".into())]]);
-        let mut rt = OrchestratorRuntime::with_orchestration_enabled(
-            Box::new(inner),
-            RoleConfig::default(),
-        );
+        let mut rt =
+            OrchestratorRuntime::with_orchestration_enabled(Box::new(inner), RoleConfig::default());
         // No user message → no planner call (which is good because there's
         // no Ollama running in unit tests anyway).
         let events = rt

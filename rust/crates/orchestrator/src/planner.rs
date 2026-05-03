@@ -114,9 +114,8 @@ fn parse_spec_from_response(blocks: &[OutputContentBlock]) -> Result<Spec, Plann
     }
     let cleaned = strip_code_fences(text.trim());
     let normalized = normalize_smart_quotes(cleaned);
-    serde_json::from_str::<Spec>(&normalized).map_err(|e| {
-        PlannerError::Parse(format!("{e}\nplanner output was: {}", text.trim()))
-    })
+    serde_json::from_str::<Spec>(&normalized)
+        .map_err(|e| PlannerError::Parse(format!("{e}\nplanner output was: {}", text.trim())))
 }
 
 /// Strip surrounding ```json ... ``` (Qwen sometimes wraps even when told not to).
@@ -164,7 +163,8 @@ mod tests {
     #[test]
     fn parse_accepts_clean_json() {
         let blocks = vec![OutputContentBlock::Text {
-            text: r#"{"goal":"x","requirements":["a","b"],"files_expected":["/tmp/z"]}"#.to_string(),
+            text: r#"{"goal":"x","requirements":["a","b"],"files_expected":["/tmp/z"]}"#
+                .to_string(),
         }];
         let spec = parse_spec_from_response(&blocks).expect("parse");
         assert_eq!(spec.goal, "x");

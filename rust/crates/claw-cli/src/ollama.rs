@@ -9,7 +9,11 @@ const PULL_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 fn base_url() -> String {
     std::env::var("OLLAMA_BASE_URL")
         .ok()
-        .map(|raw| raw.trim_end_matches("/v1").trim_end_matches('/').to_string())
+        .map(|raw| {
+            raw.trim_end_matches("/v1")
+                .trim_end_matches('/')
+                .to_string()
+        })
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
 }
@@ -144,18 +148,10 @@ pub fn pull_with_progress(name: &str, mut writer: impl Write) -> Result<(), Stri
                     }
                     last_digest = event.digest.clone();
                 }
-                if last_render.elapsed() >= Duration::from_millis(150)
-                    || completed == total
-                {
+                if last_render.elapsed() >= Duration::from_millis(150) || completed == total {
                     let elapsed = started.elapsed().as_secs_f64().max(0.001);
                     let speed = completed as f64 / elapsed;
-                    render_progress(
-                        &mut writer,
-                        &event.status,
-                        completed,
-                        total,
-                        speed,
-                    );
+                    render_progress(&mut writer, &event.status, completed, total, speed);
                     last_render = Instant::now();
                     last_completed = completed;
                 }
@@ -218,7 +214,10 @@ fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         text.to_string()
     } else {
-        text.chars().take(width.saturating_sub(1)).collect::<String>() + "…"
+        text.chars()
+            .take(width.saturating_sub(1))
+            .collect::<String>()
+            + "…"
     }
 }
 
@@ -248,4 +247,3 @@ fn format_duration(secs: u64) -> String {
         format!("{}s", secs)
     }
 }
-

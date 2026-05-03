@@ -19,8 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::{
     resolve_startup_auth_source, AuthSource, ClawApiClient, ContentBlockDelta, InputContentBlock,
-    ProviderClient,
-    InputMessage, MessageRequest, MessageResponse, OutputContentBlock,
+    InputMessage, MessageRequest, MessageResponse, OutputContentBlock, ProviderClient,
     StreamEvent as ApiStreamEvent, ToolChoice, ToolDefinition, ToolResultContentBlock,
 };
 
@@ -46,7 +45,11 @@ use tools::GlobalToolRegistry;
 
 const DEFAULT_MODEL: &str = "claude-opus-4-6";
 fn max_tokens_for_model(model: &str) -> u32 {
-    if model.contains("opus") {
+    if model.eq_ignore_ascii_case("Qwen/Qwen3.6-35B-A3B-FP8") {
+        16_000
+    } else if model.contains(':') && !model.starts_with("claude") {
+        4_096
+    } else if model.contains("opus") {
         32_000
     } else {
         64_000
@@ -123,8 +126,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output_format,
             allowed_tools,
             permission_mode,
-        } => LiveCli::new(model, true, allowed_tools, permission_mode)?
-            .run_turn_with_output(&prompt, output_format)?,
+            cwd,
+        } => run_prompt_action(
+            prompt,
+            model,
+            output_format,
+            allowed_tools,
+            permission_mode,
+            cwd,
+        )?,
         CliAction::Login => run_login()?,
         CliAction::Logout => run_logout()?,
         CliAction::Init => run_init()?,
@@ -158,11 +168,12 @@ enum CliAction {
         commands: Vec<String>,
     },
     Prompt {
-        prompt: String,
+        prompt: PromptInput,
         model: String,
         output_format: CliOutputFormat,
         allowed_tools: Option<AllowedToolSet>,
         permission_mode: PermissionMode,
+        cwd: Option<PathBuf>,
     },
     Login,
     Logout,
@@ -174,6 +185,12 @@ enum CliAction {
     },
     // prompt-mode formatting is only supported for non-interactive runs
     Help,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptInput {
+    Text(String),
+    Stdin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,11 +271,12 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
                     return Err("-p requires a prompt string".to_string());
                 }
                 return Ok(CliAction::Prompt {
-                    prompt,
+                    prompt: PromptInput::Text(prompt),
                     model: resolve_model_alias(&model).to_string(),
                     output_format,
                     allowed_tools: normalize_allowed_tools(&allowed_tool_values)?,
                     permission_mode,
+                    cwd: None,
                 });
             }
             "--print" => {
@@ -321,28 +339,91 @@ fn parse_args(args: &[String]) -> Result<CliAction, String> {
         "login" => Ok(CliAction::Login),
         "logout" => Ok(CliAction::Logout),
         "init" => Ok(CliAction::Init),
-        "prompt" => {
-            let prompt = rest[1..].join(" ");
-            if prompt.trim().is_empty() {
-                return Err("prompt subcommand requires a prompt string".to_string());
-            }
-            Ok(CliAction::Prompt {
-                prompt,
-                model,
-                output_format,
-                allowed_tools,
-                permission_mode,
-            })
-        }
-        other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
-        _other => Ok(CliAction::Prompt {
-            prompt: rest.join(" "),
+        "prompt" => parse_prompt_subcommand_args(
+            "prompt",
+            &rest[1..],
             model,
             output_format,
             allowed_tools,
             permission_mode,
+            false,
+        ),
+        "run" => parse_prompt_subcommand_args(
+            "run",
+            &rest[1..],
+            model,
+            output_format,
+            allowed_tools,
+            permission_mode,
+            true,
+        ),
+        other if other.starts_with('/') => parse_direct_slash_cli_action(&rest),
+        _other => Ok(CliAction::Prompt {
+            prompt: PromptInput::Text(rest.join(" ")),
+            model,
+            output_format,
+            allowed_tools,
+            permission_mode,
+            cwd: None,
         }),
     }
+}
+
+fn parse_prompt_subcommand_args(
+    command_name: &str,
+    args: &[String],
+    model: String,
+    output_format: CliOutputFormat,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    stdin_when_empty: bool,
+) -> Result<CliAction, String> {
+    let mut cwd = None;
+    let mut prompt_parts = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cwd" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "missing value for --cwd".to_string())?;
+                cwd = Some(PathBuf::from(value));
+                index += 2;
+            }
+            flag if flag.starts_with("--cwd=") => {
+                cwd = Some(PathBuf::from(&flag[6..]));
+                index += 1;
+            }
+            other => {
+                prompt_parts.push(other.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    let prompt = if prompt_parts.is_empty() {
+        if stdin_when_empty {
+            PromptInput::Stdin
+        } else {
+            return Err(format!(
+                "{command_name} subcommand requires a prompt string"
+            ));
+        }
+    } else if prompt_parts.len() == 1 && prompt_parts[0] == "-" {
+        PromptInput::Stdin
+    } else {
+        PromptInput::Text(prompt_parts.join(" "))
+    };
+
+    Ok(CliAction::Prompt {
+        prompt,
+        model,
+        output_format,
+        allowed_tools,
+        permission_mode,
+        cwd,
+    })
 }
 
 fn join_optional_args(args: &[String]) -> Option<String> {
@@ -388,7 +469,10 @@ fn format_direct_slash_command_error(command: &str, is_unknown: bool) -> String 
 }
 
 fn resolve_model_alias(model: &str) -> String {
-    api::resolve_model_alias(model)
+    match model {
+        "coinflip" | "notclaude-coinflip" => "swarm".to_string(),
+        _ => api::resolve_model_alias(model),
+    }
 }
 
 fn is_ollama_target(model: &str) -> bool {
@@ -762,6 +846,8 @@ Aliases
   opus             claude-opus-4-6
   sonnet           claude-sonnet-4-6
   haiku            claude-haiku-4-5-20251213
+  gpt              gpt-5.5                  (OpenAI · Codex login)
+  qwen36           Qwen/Qwen3.6-35B-A3B-FP8  (Compute Community)
   qwen-coder       qwen3-coder:30b           ({qwen_status})
   glm-flash        glm-4.7-flash:q4          ({glm_status})
   gemma            gemma4:26b                ({gemma_status})
@@ -1115,6 +1201,41 @@ fn run_repl(
     Ok(())
 }
 
+fn run_prompt_action(
+    prompt: PromptInput,
+    model: String,
+    output_format: CliOutputFormat,
+    allowed_tools: Option<AllowedToolSet>,
+    permission_mode: PermissionMode,
+    cwd: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(cwd) = cwd {
+        env::set_current_dir(&cwd)
+            .map_err(|error| format!("failed to enter --cwd {}: {error}", cwd.display()))?;
+    }
+    let prompt = resolve_prompt_input(prompt)?;
+    if prompt.trim().is_empty() {
+        return Err("prompt was empty".into());
+    }
+    LiveCli::new(model, true, allowed_tools, permission_mode)?
+        .run_turn_with_output(&prompt, output_format)?;
+    Ok(())
+}
+
+fn resolve_prompt_input(prompt: PromptInput) -> Result<String, Box<dyn std::error::Error>> {
+    match prompt {
+        PromptInput::Text(prompt) => Ok(prompt),
+        PromptInput::Stdin => {
+            if io::stdin().is_terminal() {
+                return Err("run requires a prompt via arguments or piped stdin".into());
+            }
+            let mut prompt = String::new();
+            io::stdin().read_to_string(&mut prompt)?;
+            Ok(prompt)
+        }
+    }
+}
+
 /// Horizontal rule above the input prompt — matches Claude Code's input frame.
 /// Prefixed with `\r` to defensively reset cursor to col 0 even if some prior
 /// rendering left the cursor mid-line.
@@ -1136,15 +1257,18 @@ fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
         .clamp(40, 200);
     let dim_open = if color { "\x1b[2m" } else { "" };
     let dim_close = if color { "\x1b[0m" } else { "" };
-    let orange_dot = if color { "\x1b[38;2;217;119;87m●\x1b[0m" } else { "●" };
+    let orange_dot = if color {
+        "\x1b[38;2;217;119;87m●\x1b[0m"
+    } else {
+        "●"
+    };
     println!("\r{dim_open}{}{dim_close}", "─".repeat(term_width));
 
     let left = "? for shortcuts";
     let right = format!("{orange_dot} {dim_open}{}{dim_close}", cli.model);
     let left_visible = visible_width(left);
     let right_visible = visible_width(&right);
-    let pad = term_width
-        .saturating_sub(left_visible + right_visible + 4);
+    let pad = term_width.saturating_sub(left_visible + right_visible + 4);
     println!(
         "\r{dim_open}  {left}{}{}{dim_close}",
         " ".repeat(pad),
@@ -1262,11 +1386,7 @@ impl LiveCli {
         match result {
             Ok(_) => {
                 // Silent finish — no "done" message, just clear the spinner.
-                spinner.finish(
-                    "",
-                    TerminalRenderer::new().color_theme(),
-                    &mut stdout,
-                )?;
+                spinner.finish("", TerminalRenderer::new().color_theme(), &mut stdout)?;
                 self.persist_session()?;
                 Ok(())
             }
@@ -3076,8 +3196,7 @@ fn build_runtime(
     allowed_tools: Option<AllowedToolSet>,
     permission_mode: PermissionMode,
     progress_reporter: Option<InternalPromptProgressReporter>,
-) -> Result<ConversationRuntime<ApiClientHandle, CliToolExecutor>, Box<dyn std::error::Error>>
-{
+) -> Result<ConversationRuntime<ApiClientHandle, CliToolExecutor>, Box<dyn std::error::Error>> {
     let (feature_config, tool_registry) = build_runtime_plugin_state()?;
 
     // Detect swarm pseudo-models. They route through OrchestratorRuntime
@@ -3105,10 +3224,12 @@ fn build_runtime(
     let api_client: Box<dyn runtime::ApiClient + Send> = if is_swarm {
         // Phase 3-4: planner + reviewer + retry are active. Phase 1's
         // transparent passthrough was just `with_default_roles`.
-        Box::new(orchestrator::OrchestratorRuntime::with_orchestration_enabled(
-            Box::new(inner_client),
-            orchestrator::RoleConfig::default(),
-        ))
+        Box::new(
+            orchestrator::OrchestratorRuntime::with_orchestration_enabled(
+                Box::new(inner_client),
+                orchestrator::RoleConfig::default(),
+            ),
+        )
     } else {
         Box::new(inner_client)
     };
@@ -3171,13 +3292,14 @@ impl runtime::PermissionPrompter for CliPermissionPrompter {
 
 struct DefaultRuntimeClient {
     runtime: tokio::runtime::Runtime,
-    client: ProviderClient,
+    client: Option<ProviderClient>,
     model: String,
     enable_tools: bool,
     emit_output: bool,
     allowed_tools: Option<AllowedToolSet>,
     tool_registry: GlobalToolRegistry,
     progress_reporter: Option<InternalPromptProgressReporter>,
+    swarm: Option<SwarmState>,
 }
 
 impl DefaultRuntimeClient {
@@ -3189,23 +3311,149 @@ impl DefaultRuntimeClient {
         tool_registry: GlobalToolRegistry,
         progress_reporter: Option<InternalPromptProgressReporter>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let swarm = is_swarm_model(&model);
         Ok(Self {
             runtime: tokio::runtime::Runtime::new()?,
             // Route to the right provider based on model name. For Claude/Anthropic
             // models, pass any resolved Claw auth (env vars or saved OAuth) so we
             // don't redundantly read from env. For OpenAI-compat / xAI models, the
             // OAuth resolution failure is irrelevant (.ok() makes it None).
-            client: ProviderClient::from_model_with_default_auth(
-                &model,
-                resolve_cli_auth_source().ok(),
-            )?,
+            client: if swarm {
+                None
+            } else {
+                Some(ProviderClient::from_model_with_default_auth(
+                    &model,
+                    resolve_cli_auth_source().ok(),
+                )?)
+            },
             model,
             enable_tools,
             emit_output,
             allowed_tools,
             tool_registry,
             progress_reporter,
+            swarm: swarm.then(SwarmState::from_env),
         })
+    }
+
+    fn stream_swarm(
+        &mut self,
+        api_request: ApiRequest,
+        base_request: MessageRequest,
+    ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let auth = resolve_cli_auth_source().ok();
+        let swarm = self
+            .swarm
+            .as_mut()
+            .expect("swarm state should exist for swarm model");
+
+        if swarm.distilled_context.is_none() {
+            let prompt = build_swarm_distill_prompt(&api_request, &base_request);
+            let planned = self.runtime.block_on(send_plain_model_message(
+                &swarm.orchestrator_model,
+                &prompt,
+                "Distill the user's intent into concise success criteria for a coding-agent worker. Return plain text.",
+                auth.clone(),
+            ))?;
+            swarm.distilled_context = Some(planned);
+        }
+
+        let mut last_failure = None;
+        let mut last_response = None;
+        for attempt_index in 0..swarm.max_attempts {
+            let worker_model = swarm.next_worker_model();
+            let worker_request =
+                build_swarm_worker_request(&base_request, swarm, &worker_model, attempt_index);
+
+            let response = match self.runtime.block_on(send_model_message(
+                &worker_model,
+                &worker_request,
+                auth.clone(),
+            )) {
+                Ok(response) => response,
+                Err(error) => {
+                    let failure = format!("{worker_model}: provider error: {error}");
+                    swarm.record_failure(worker_model, failure.clone());
+                    last_failure = Some(failure);
+                    continue;
+                }
+            };
+
+            if response_has_tool_use(&response) {
+                swarm.active_worker_model = Some(worker_model);
+                return Self::render_response_events(self.emit_output, response);
+            }
+
+            swarm.active_worker_model = None;
+            let candidate_text = response_text(&response);
+            let verdict_prompt = build_swarm_verdict_prompt(
+                swarm,
+                &worker_model,
+                &candidate_text,
+                &api_request,
+                &base_request,
+            );
+            let verdict = self.runtime.block_on(send_plain_model_message(
+                &swarm.orchestrator_model,
+                &verdict_prompt,
+                "Evaluate whether a worker output satisfies the user's intent. Return compact JSON with success, reason, and next_guidance.",
+                auth.clone(),
+            ))?;
+
+            if parse_swarm_success(&verdict) {
+                swarm.record_success(worker_model);
+                return Self::render_response_events(self.emit_output, response);
+            }
+
+            let failure = format!("{worker_model}: {}", verdict.trim());
+            swarm.record_failure(worker_model, failure.clone());
+            last_failure = Some(failure);
+            last_response = Some(response);
+        }
+
+        if let Some(response) = last_response {
+            let mut text = String::from(
+                "The swarm exhausted its attempt budget without a successful evaluator verdict.\n\n",
+            );
+            if let Some(failure) = last_failure {
+                text.push_str("Last evaluator result:\n");
+                text.push_str(&failure);
+                text.push_str("\n\n");
+            }
+            text.push_str("Last worker output:\n");
+            text.push_str(&response_text(&response));
+            return Self::render_text_events(self.emit_output, text);
+        }
+
+        Err(RuntimeError::new(last_failure.unwrap_or_else(|| {
+            "swarm had no available worker attempts".to_string()
+        })))
+    }
+
+    fn render_response_events(
+        emit_output: bool,
+        response: MessageResponse,
+    ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let mut stdout = io::stdout();
+        let mut sink = io::sink();
+        let out: &mut dyn Write = if emit_output { &mut stdout } else { &mut sink };
+        response_to_events(response, out)
+    }
+
+    fn render_text_events(
+        emit_output: bool,
+        text: String,
+    ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let mut stdout = io::stdout();
+        let mut sink = io::sink();
+        let out: &mut dyn Write = if emit_output { &mut stdout } else { &mut sink };
+        write!(out, "{text}").map_err(|error| RuntimeError::new(error.to_string()))?;
+        out.flush()
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        Ok(vec![
+            AssistantEvent::TextDelta(text),
+            AssistantEvent::MessageStop,
+        ])
     }
 }
 
@@ -3217,6 +3465,230 @@ fn resolve_cli_auth_source() -> Result<AuthSource, Box<dyn std::error::Error>> {
         })?;
         Ok(config.oauth().cloned())
     })?)
+}
+
+#[derive(Debug, Clone)]
+struct SwarmState {
+    orchestrator_model: String,
+    worker_models: Vec<String>,
+    max_attempts: usize,
+    active_worker_model: Option<String>,
+    last_failed_model: Option<String>,
+    distilled_context: Option<String>,
+    attempt_ledger: Vec<String>,
+}
+
+impl SwarmState {
+    fn from_env() -> Self {
+        let orchestrator_model =
+            env::var("NOTCLAUDE_SWARM_ORCHESTRATOR").unwrap_or_else(|_| "gpt-5.5".to_string());
+        let worker_models = env::var("NOTCLAUDE_SWARM_MODELS")
+            .unwrap_or_else(|_| "runpod-qwen36,gemma4:e2b".to_string())
+            .split(',')
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(resolve_model_alias)
+            .collect::<Vec<_>>();
+        let max_attempts = env::var("NOTCLAUDE_SWARM_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(4);
+        Self {
+            orchestrator_model: resolve_model_alias(&orchestrator_model).to_string(),
+            worker_models: if worker_models.is_empty() {
+                vec![
+                    resolve_model_alias("runpod-qwen36"),
+                    resolve_model_alias("gemma4:e2b"),
+                ]
+            } else {
+                worker_models
+            },
+            max_attempts,
+            active_worker_model: None,
+            last_failed_model: None,
+            distilled_context: None,
+            attempt_ledger: Vec::new(),
+        }
+    }
+
+    fn next_worker_model(&self) -> String {
+        if let Some(model) = &self.active_worker_model {
+            return model.clone();
+        }
+        self.worker_models
+            .iter()
+            .find(|model| Some(*model) != self.last_failed_model.as_ref())
+            .or_else(|| self.worker_models.first())
+            .cloned()
+            .unwrap_or_else(|| "gemma4:26b".to_string())
+    }
+
+    fn record_failure(&mut self, model: String, failure: String) {
+        self.last_failed_model = Some(model.clone());
+        self.active_worker_model = None;
+        self.attempt_ledger.push(format!("FAIL {failure}"));
+        if self.attempt_ledger.len() > 8 {
+            self.attempt_ledger.remove(0);
+        }
+    }
+
+    fn record_success(&mut self, model: String) {
+        self.last_failed_model = None;
+        self.active_worker_model = None;
+        self.attempt_ledger.push(format!("PASS {model}"));
+        if self.attempt_ledger.len() > 8 {
+            self.attempt_ledger.remove(0);
+        }
+    }
+}
+
+fn is_swarm_model(model: &str) -> bool {
+    matches!(
+        model,
+        "coinflip" | "notclaude-coinflip" | "swarm" | "local-swarm" | "orchestrator"
+    ) || env::var("NOTCLAUDE_SWARM")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+async fn send_model_message(
+    model: &str,
+    request: &MessageRequest,
+    auth: Option<AuthSource>,
+) -> Result<MessageResponse, RuntimeError> {
+    let client = ProviderClient::from_model_with_default_auth(model, auth)
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    let request = MessageRequest {
+        model: model.to_string(),
+        max_tokens: max_tokens_for_model(model),
+        stream: false,
+        ..request.clone()
+    };
+    let timeout_secs = env::var("NOTCLAUDE_MODEL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(300);
+    tokio::time::timeout(
+        Duration::from_secs(timeout_secs),
+        client.send_message(&request),
+    )
+    .await
+    .map_err(|_| RuntimeError::new(format!("{model}: timed out after {timeout_secs}s")))?
+    .map_err(|error| RuntimeError::new(error.to_string()))
+}
+
+async fn send_plain_model_message(
+    model: &str,
+    prompt: &str,
+    system: &str,
+    auth: Option<AuthSource>,
+) -> Result<String, RuntimeError> {
+    let request = MessageRequest {
+        model: model.to_string(),
+        max_tokens: max_tokens_for_model(model).min(16_000),
+        messages: vec![InputMessage::user_text(prompt)],
+        system: Some(system.to_string()),
+        tools: None,
+        tool_choice: None,
+        stream: false,
+    };
+    let response = send_model_message(model, &request, auth).await?;
+    Ok(response_text(&response))
+}
+
+fn build_swarm_distill_prompt(_api_request: &ApiRequest, base_request: &MessageRequest) -> String {
+    format!(
+        "User/session messages:\n{}\n\nAvailable tools: {}\n\nDistill the user's intent, concrete success criteria, likely verification steps, and any constraints for local worker models.",
+        serde_json::to_string_pretty(&base_request.messages)
+            .unwrap_or_else(|_| "<unserializable messages>".to_string()),
+        base_request.tools.as_ref().map_or(0, Vec::len),
+    )
+}
+
+fn build_swarm_worker_request(
+    base_request: &MessageRequest,
+    swarm: &SwarmState,
+    worker_model: &str,
+    attempt_index: usize,
+) -> MessageRequest {
+    let mut system = base_request.system.clone().unwrap_or_default();
+    system.push_str("\n\nSwarm orchestration context:\n");
+    system.push_str("You are a worker model inside a GPT-5.5 orchestrated local swarm. Produce the best direct answer or tool calls for this attempt.\n");
+    system.push_str("Do not mention the swarm unless it is directly useful to the user.\n");
+    system.push_str(&format!("Current worker model: {worker_model}\n"));
+    system.push_str(&format!("Attempt number: {}\n", attempt_index + 1));
+    if let Some(context) = &swarm.distilled_context {
+        system.push_str("\nIntent and success criteria:\n");
+        system.push_str(context);
+        system.push('\n');
+    }
+    if !swarm.attempt_ledger.is_empty() {
+        system.push_str("\nPrevious attempt feedback to avoid repeating:\n");
+        system.push_str(&swarm.attempt_ledger.join("\n"));
+        system.push('\n');
+    }
+
+    MessageRequest {
+        model: worker_model.to_string(),
+        max_tokens: max_tokens_for_model(worker_model),
+        system: Some(system),
+        stream: false,
+        ..base_request.clone()
+    }
+}
+
+fn build_swarm_verdict_prompt(
+    swarm: &SwarmState,
+    worker_model: &str,
+    candidate_text: &str,
+    _api_request: &ApiRequest,
+    base_request: &MessageRequest,
+) -> String {
+    format!(
+        "Original session messages:\n{}\n\nDistilled intent and success criteria:\n{}\n\nAttempt ledger:\n{}\n\nWorker model: {worker_model}\n\nWorker output:\n{}\n\nReturn JSON only: {{\"success\": true|false, \"reason\": \"...\", \"next_guidance\": \"...\"}}. Mark success true only if the output satisfies the user's request and does not need another local attempt.",
+        serde_json::to_string_pretty(&base_request.messages)
+            .unwrap_or_else(|_| "<unserializable messages>".to_string()),
+        swarm.distilled_context.as_deref().unwrap_or("<none>"),
+        if swarm.attempt_ledger.is_empty() {
+            "<none>".to_string()
+        } else {
+            swarm.attempt_ledger.join("\n")
+        },
+        candidate_text,
+    )
+}
+
+fn response_has_tool_use(response: &MessageResponse) -> bool {
+    response
+        .content
+        .iter()
+        .any(|block| matches!(block, OutputContentBlock::ToolUse { .. }))
+}
+
+fn response_text(response: &MessageResponse) -> String {
+    response
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            OutputContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn parse_swarm_success(verdict: &str) -> bool {
+    let trimmed = verdict.trim();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return value
+            .get("success")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("\"success\": true") || lower.contains("\"success\":true")
 }
 
 impl ApiClient for DefaultRuntimeClient {
@@ -3237,9 +3709,15 @@ impl ApiClient for DefaultRuntimeClient {
             stream: true,
         };
 
+        if self.swarm.is_some() {
+            return self.stream_swarm(request, message_request);
+        }
+
         self.runtime.block_on(async {
             let mut stream = self
                 .client
+                .as_ref()
+                .expect("non-swarm client should be initialized")
                 .stream_message(&message_request)
                 .await
                 .map_err(|error| RuntimeError::new(error.to_string()))?;
@@ -3351,8 +3829,11 @@ impl ApiClient for DefaultRuntimeClient {
                 return Ok(events);
             }
 
-            let response = self
+            let client = self
                 .client
+                .as_ref()
+                .ok_or_else(|| RuntimeError::new("provider client unavailable".to_string()))?;
+            let response = client
                 .send_message(&MessageRequest {
                     stream: false,
                     ..message_request.clone()
@@ -3618,9 +4099,21 @@ fn truncate_path_display(path: &str, max: usize) -> String {
 
 fn render_banner_box(inputs: BannerInputs) -> String {
     // Color helpers
-    let orange = if inputs.color { "\x1b[38;2;217;119;87m" } else { "" };
-    let bold_orange = if inputs.color { "\x1b[1;38;2;217;119;87m" } else { "" };
-    let bold_red = if inputs.color { "\x1b[1;38;2;185;28;28m" } else { "" };
+    let orange = if inputs.color {
+        "\x1b[38;2;217;119;87m"
+    } else {
+        ""
+    };
+    let bold_orange = if inputs.color {
+        "\x1b[1;38;2;217;119;87m"
+    } else {
+        ""
+    };
+    let bold_red = if inputs.color {
+        "\x1b[1;38;2;185;28;28m"
+    } else {
+        ""
+    };
     let dim = if inputs.color { "\x1b[2m" } else { "" };
     let reset = if inputs.color { "\x1b[0m" } else { "" };
     let border = if inputs.color { "\x1b[2m" } else { "" };
@@ -3635,9 +4128,7 @@ fn render_banner_box(inputs: BannerInputs) -> String {
     // Title segment (visible) and the rest of the dashes
     let title_visible = format!(" NOT Claude Code v{VERSION} ");
     let title_styled = if inputs.color {
-        format!(
-            " {bold_red}NOT{reset} {bold_orange}Claude Code{reset} {dim}v{VERSION}{reset} "
-        )
+        format!(" {bold_red}NOT{reset} {bold_orange}Claude Code{reset} {dim}v{VERSION}{reset} ")
     } else {
         title_visible.clone()
     };
@@ -3665,10 +4156,7 @@ fn render_banner_box(inputs: BannerInputs) -> String {
     // Compose left-column lines
     let cwd_short = truncate_path_display(inputs.cwd, left_width.saturating_sub(2));
     let logo = build_anthropic_asterisk(orange, reset);
-    let model_line = format!(
-        "{dim}model{reset} {bold_orange}{}{reset}",
-        inputs.model
-    );
+    let model_line = format!("{dim}model{reset} {bold_orange}{}{reset}", inputs.model);
     let cwd_line = format!("{dim}cwd{reset}   {}", cwd_short);
     let mut left: Vec<String> = vec![
         String::new(),
@@ -3744,14 +4232,10 @@ fn render_banner_box(inputs: BannerInputs) -> String {
 /// Anthropic-style asterisk in Unicode quadrant block characters. Roughly
 /// matches Claude Code's compact LogoV2 glyph.
 fn build_anthropic_asterisk(orange: &str, reset: &str) -> Vec<String> {
-    [
-        "▗ ▗   ▖ ▖",
-        "         ",
-        "  ▘▘ ▝▝  ",
-    ]
-    .iter()
-    .map(|line| format!("{orange}{line}{reset}"))
-    .collect()
+    ["▗ ▗   ▖ ▖", "         ", "  ▘▘ ▝▝  "]
+        .iter()
+        .map(|line| format!("{orange}{line}{reset}"))
+        .collect()
 }
 
 fn format_tool_call_start(name: &str, input: &str) -> String {
@@ -3805,9 +4289,7 @@ fn format_tool_call_start(name: &str, input: &str) -> String {
     // bold orange with brief args, followed by detail on a continuation line
     // prefixed with the dim ⎿ glyph.
     let summary = tool_call_summary(name, &parsed);
-    let header = format!(
-        "\x1b[38;2;217;119;87m●\x1b[0m \x1b[1m{name}\x1b[0m{summary}"
-    );
+    let header = format!("\x1b[38;2;217;119;87m●\x1b[0m \x1b[1m{name}\x1b[0m{summary}");
     if detail.is_empty() {
         header
     } else {
@@ -4191,13 +4673,8 @@ fn format_generic_tool_result(icon: &str, name: &str, parsed: &serde_json::Value
 /// Compact WebSearch result: just `query → N results` with the first result's
 /// title/url, instead of dumping the full JSON.
 fn format_web_search_result(icon: &str, parsed: &serde_json::Value) -> String {
-    let query = parsed
-        .get("query")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let results = parsed
-        .get("results")
-        .and_then(|v| v.as_array());
+    let query = parsed.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let results = parsed.get("results").and_then(|v| v.as_array());
     let count = results.map(|r| r.len()).unwrap_or(0);
     let mut head = format!(
         "{icon} \x1b[38;5;245mWebSearch\x1b[0m \x1b[2m\"{}\"\x1b[0m \x1b[38;5;245m→\x1b[0m {count} result{}",
@@ -4484,6 +4961,14 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
+        "  notclaude run --cwd PATH \"fix tests\"   Scriptable workspace-aware run"
+    )?;
+    writeln!(
+        out,
+        "  echo \"review this\" | notclaude run     Read a prompt from stdin"
+    )?;
+    writeln!(
+        out,
         "  notclaude --resume SESSION.json /status  Inspect a saved session"
     )?;
     writeln!(out)?;
@@ -4526,7 +5011,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
         out,
         "  notclaude skills                       List installed skills"
     )?;
-    writeln!(out, "  notclaude system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
+    writeln!(
+        out,
+        "  notclaude system-prompt [--cwd PATH] [--date YYYY-MM-DD]"
+    )?;
     writeln!(
         out,
         "  notclaude login                        Start the OAuth login flow"
@@ -4538,6 +5026,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
         "  notclaude init                         Scaffold NOTCLAUDE.md + local files"
+    )?;
+    writeln!(
+        out,
+        "  notclaude run [--cwd PATH] [PROMPT|-]   Run non-interactively for scripts"
     )?;
     writeln!(out)?;
     writeln!(out, "Flags")?;
@@ -4586,6 +5078,10 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
+        "  echo \"summarize changed files\" | claw run --cwd /path/to/repo"
+    )?;
+    writeln!(
+        out,
         "  claw --allowedTools read,glob \"summarize Cargo.toml\""
     )?;
     writeln!(
@@ -4615,7 +5111,7 @@ mod tests {
         render_repl_help, render_unknown_repl_command, resolve_model_alias, response_to_events,
         resume_supported_slash_commands, slash_command_completion_candidates, status_context,
         CliAction, CliOutputFormat, InternalPromptProgressEvent, InternalPromptProgressState,
-        SlashCommand, StatusUsage, DEFAULT_MODEL,
+        PromptInput, SlashCommand, StatusUsage, DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{PluginTool, PluginToolDefinition, PluginToolPermission};
@@ -4671,11 +5167,60 @@ mod tests {
         assert_eq!(
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
-                prompt: "hello world".to_string(),
+                prompt: PromptInput::Text("hello world".to_string()),
                 model: DEFAULT_MODEL.to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                cwd: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_run_subcommand_with_cwd() {
+        let args = vec![
+            "run".to_string(),
+            "--cwd".to_string(),
+            "/tmp/project".to_string(),
+            "fix".to_string(),
+            "tests".to_string(),
+        ];
+        assert_eq!(
+            parse_args(&args).expect("args should parse"),
+            CliAction::Prompt {
+                prompt: PromptInput::Text("fix tests".to_string()),
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+                cwd: Some(PathBuf::from("/tmp/project")),
+            }
+        );
+    }
+
+    #[test]
+    fn run_subcommand_reads_stdin_when_prompt_is_omitted_or_dash() {
+        assert_eq!(
+            parse_args(&["run".to_string()]).expect("args should parse"),
+            CliAction::Prompt {
+                prompt: PromptInput::Stdin,
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+                cwd: None,
+            }
+        );
+        assert_eq!(
+            parse_args(&["run".to_string(), "-".to_string()]).expect("args should parse"),
+            CliAction::Prompt {
+                prompt: PromptInput::Stdin,
+                model: DEFAULT_MODEL.to_string(),
+                output_format: CliOutputFormat::Text,
+                allowed_tools: None,
+                permission_mode: PermissionMode::DangerFullAccess,
+                cwd: None,
             }
         );
     }
@@ -4692,11 +5237,12 @@ mod tests {
         assert_eq!(
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
-                prompt: "explain this".to_string(),
+                prompt: PromptInput::Text("explain this".to_string()),
                 model: "custom-opus".to_string(),
                 output_format: CliOutputFormat::Json,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                cwd: None,
             }
         );
     }
@@ -4712,11 +5258,12 @@ mod tests {
         assert_eq!(
             parse_args(&args).expect("args should parse"),
             CliAction::Prompt {
-                prompt: "explain this".to_string(),
+                prompt: PromptInput::Text("explain this".to_string()),
                 model: "claude-opus-4-6".to_string(),
                 output_format: CliOutputFormat::Text,
                 allowed_tools: None,
                 permission_mode: PermissionMode::DangerFullAccess,
+                cwd: None,
             }
         );
     }
@@ -4726,6 +5273,9 @@ mod tests {
         assert_eq!(resolve_model_alias("opus"), "claude-opus-4-6");
         assert_eq!(resolve_model_alias("sonnet"), "claude-sonnet-4-6");
         assert_eq!(resolve_model_alias("haiku"), "claude-haiku-4-5-20251213");
+        assert_eq!(resolve_model_alias("coinflip"), "swarm");
+        assert_eq!(resolve_model_alias("notclaude-coinflip"), "swarm");
+        assert_eq!(resolve_model_alias("qwen36"), "Qwen/Qwen3.6-35B-A3B-FP8");
         assert_eq!(resolve_model_alias("custom-opus"), "custom-opus");
     }
 
@@ -5056,9 +5606,9 @@ mod tests {
         let mut help = Vec::new();
         print_help_to(&mut help).expect("help should render");
         let help = String::from_utf8(help).expect("help should be utf8");
-        assert!(help.contains("claw init"));
-        assert!(help.contains("claw agents"));
-        assert!(help.contains("claw skills"));
+        assert!(help.contains("notclaude init"));
+        assert!(help.contains("notclaude agents"));
+        assert!(help.contains("notclaude skills"));
         assert!(help.contains("claw /skills"));
     }
 
@@ -5341,11 +5891,9 @@ mod tests {
         let rendered = format_tool_result("plugin_echo", &output, false);
 
         assert!(rendered.contains("plugin_echo"));
-        assert!(rendered.contains("payload 000"));
-        assert!(rendered.contains("payload 040"));
-        assert!(!rendered.contains("payload 080"));
+        assert!(rendered.contains("2 keys"));
+        assert!(!rendered.contains("payload 000"));
         assert!(!rendered.contains("payload 119"));
-        assert!(rendered.contains("full result preserved in session"));
         assert!(output.contains("payload 119"));
     }
 
@@ -5360,9 +5908,8 @@ mod tests {
 
         assert!(rendered.contains("plugin_echo"));
         assert!(rendered.contains("raw 000"));
-        assert!(rendered.contains("raw 059"));
+        assert!(rendered.contains("raw 014"));
         assert!(!rendered.contains("raw 119"));
-        assert!(rendered.contains("full result preserved in session"));
         assert!(output.contains("raw 119"));
     }
 

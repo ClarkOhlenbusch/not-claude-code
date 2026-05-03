@@ -91,7 +91,9 @@ fn parse_review(blocks: &[OutputContentBlock]) -> ReviewOutcome {
     let normalized = normalize_smart_quotes(cleaned);
     match serde_json::from_str::<ReviewerResponse>(&normalized) {
         Ok(resp) if resp.pass => ReviewOutcome::Pass,
-        Ok(resp) => ReviewOutcome::Fail { reason: resp.reason },
+        Ok(resp) => ReviewOutcome::Fail {
+            reason: resp.reason,
+        },
         // Fallback: if reviewer JSON is malformed, let the turn through
         // rather than blocking on the model's failure to follow format.
         Err(_) => ReviewOutcome::Pass,

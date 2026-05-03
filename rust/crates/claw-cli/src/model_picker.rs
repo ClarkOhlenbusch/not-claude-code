@@ -97,8 +97,12 @@ pub struct ResolvedEntry {
 #[derive(Debug, Clone)]
 pub enum EntryStatus {
     Cloud,
-    Ready { size_bytes: u64 },
-    NotPulled { estimated_gb: Option<f32> },
+    Ready {
+        size_bytes: u64,
+    },
+    NotPulled {
+        estimated_gb: Option<f32>,
+    },
     /// Always available — the swarm path doesn't pull a model itself,
     /// it dispatches to whatever the configured roles use.
     Swarm,

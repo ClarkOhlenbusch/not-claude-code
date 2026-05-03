@@ -29,6 +29,7 @@ pub enum ProviderKind {
     Xai,
     OpenAi,
     Ollama,
+    ComputeCommunity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +141,87 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
         },
     ),
     (
+        "gpt",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        },
+    ),
+    (
+        "gpt-5.5",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        },
+    ),
+    (
+        "gpt-5.5-pro",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        },
+    ),
+    (
+        "gpt-5.4",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        },
+    ),
+    (
+        "gpt-5.4-mini",
+        ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        },
+    ),
+    (
+        "qwen36",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
+        },
+    ),
+    (
+        "qwen3.6",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
+        },
+    ),
+    (
+        "runpod-qwen36",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
+        },
+    ),
+    (
+        "qwen/qwen3.6-35b-a3b-fp8",
+        ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
+        },
+    ),
+    (
         "qwen-coder",
         ProviderMetadata {
             provider: ProviderKind::Ollama,
@@ -224,7 +306,14 @@ pub fn resolve_model_alias(model: &str) -> String {
                     "grok-2" => "grok-2",
                     _ => trimmed,
                 },
-                ProviderKind::OpenAi => trimmed,
+                ProviderKind::OpenAi => match *alias {
+                    "gpt" => "gpt-5.5",
+                    _ => trimmed,
+                },
+                ProviderKind::ComputeCommunity => match *alias {
+                    "qwen36" | "qwen3.6" | "runpod-qwen36" => "Qwen/Qwen3.6-35B-A3B-FP8",
+                    _ => trimmed,
+                },
                 ProviderKind::Ollama => match *alias {
                     "qwen-coder" => "qwen3-coder:30b",
                     "glm-flash" => "glm-4.7-flash:q4",
@@ -249,6 +338,22 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+        });
+    }
+    if lower.starts_with("gpt-") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::OpenAi,
+            auth_env: "OPENAI_API_KEY",
+            base_url_env: "OPENAI_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OPENAI_BASE_URL,
+        });
+    }
+    if lower == "qwen/qwen3.6-35b-a3b-fp8" {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::ComputeCommunity,
+            auth_env: "COMPUTE_COMMUNITY_API_KEY",
+            base_url_env: "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_COMPUTE_COMMUNITY_QWEN_BASE_URL,
         });
     }
     if lower.contains(':') && !lower.starts_with("claude") {
@@ -282,7 +387,9 @@ pub fn detect_provider_kind(model: &str) -> ProviderKind {
 #[must_use]
 pub fn max_tokens_for_model(model: &str) -> u32 {
     let canonical = resolve_model_alias(model);
-    if canonical.contains("opus") {
+    if canonical.eq_ignore_ascii_case("Qwen/Qwen3.6-35B-A3B-FP8") {
+        16_000
+    } else if canonical.contains("opus") {
         32_000
     } else {
         64_000
@@ -298,6 +405,19 @@ mod tests {
         assert_eq!(resolve_model_alias("grok"), "grok-3");
         assert_eq!(resolve_model_alias("grok-mini"), "grok-3-mini");
         assert_eq!(resolve_model_alias("grok-2"), "grok-2");
+    }
+
+    #[test]
+    fn resolves_compute_qwen_aliases() {
+        assert_eq!(resolve_model_alias("qwen36"), "Qwen/Qwen3.6-35B-A3B-FP8");
+        assert_eq!(
+            resolve_model_alias("runpod-qwen36"),
+            "Qwen/Qwen3.6-35B-A3B-FP8"
+        );
+        assert_eq!(
+            detect_provider_kind("qwen36"),
+            ProviderKind::ComputeCommunity
+        );
     }
 
     #[test]

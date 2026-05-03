@@ -190,8 +190,7 @@ impl EditSession {
         write_with_crlf(out, prompt.as_ref())?;
         write_with_crlf(out, buffer.as_ref())?;
 
-        let (cursor_row, cursor_col, total_lines) =
-            self.cursor_layout(prompt.as_ref(), width);
+        let (cursor_row, cursor_col, total_lines) = self.cursor_layout(prompt.as_ref(), width);
         let rows_to_move_up = total_lines.saturating_sub(cursor_row + 1);
         if rows_to_move_up > 0 {
             queue!(out, MoveUp(to_u16(rows_to_move_up)?))?;
@@ -270,7 +269,9 @@ impl EditSession {
 }
 
 fn terminal_width() -> usize {
-    terminal::size().map(|(cols, _)| cols as usize).unwrap_or(80)
+    terminal::size()
+        .map(|(cols, _)| cols as usize)
+        .unwrap_or(80)
 }
 
 fn write_with_crlf(out: &mut impl Write, text: &str) -> io::Result<()> {

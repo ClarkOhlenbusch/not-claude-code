@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
 
-use api::{read_xai_base_url, ApiError, AuthSource, ProviderClient, ProviderKind};
+use api::{
+    read_compute_community_qwen_base_url, read_xai_base_url, ApiError, AuthSource, ProviderClient,
+    ProviderKind,
+};
 
 #[test]
 fn provider_client_routes_grok_aliases_through_xai() {
@@ -11,6 +14,55 @@ fn provider_client_routes_grok_aliases_through_xai() {
     let client = ProviderClient::from_model("grok-mini").expect("grok alias should resolve");
 
     assert_eq!(client.provider_kind(), ProviderKind::Xai);
+}
+
+#[test]
+fn provider_client_routes_gpt_models_through_openai() {
+    let _lock = env_lock();
+    let _openai_api_key = EnvVarGuard::set("OPENAI_API_KEY", Some("openai-test-key"));
+
+    let client = ProviderClient::from_model("gpt-5.5").expect("gpt model should resolve");
+
+    assert_eq!(client.provider_kind(), ProviderKind::OpenAi);
+}
+
+#[test]
+fn provider_client_routes_compute_qwen_through_compute_community() {
+    let _lock = env_lock();
+    let _api_key = EnvVarGuard::set("COMPUTE_COMMUNITY_API_KEY", Some("cc-test-key"));
+
+    let client =
+        ProviderClient::from_model("runpod-qwen36").expect("compute qwen alias should resolve");
+
+    assert_eq!(client.provider_kind(), ProviderKind::ComputeCommunity);
+}
+
+#[test]
+fn provider_client_reports_missing_compute_community_credentials() {
+    let _lock = env_lock();
+    let _api_key = EnvVarGuard::set("COMPUTE_COMMUNITY_API_KEY", None);
+    let _compat_api_key = EnvVarGuard::set("COMPUTECOMMUNITY_API_KEY", None);
+    let _short_api_key = EnvVarGuard::set("CC_API_KEY", None);
+    let _fallback_api_key = EnvVarGuard::set("RUNPOD_QWEN_API_KEY", None);
+
+    let error = ProviderClient::from_model("qwen36")
+        .expect_err("compute qwen requests without API key should fail fast");
+
+    match error {
+        ApiError::MissingCredentials { provider, env_vars } => {
+            assert_eq!(provider, "ComputeCommunity");
+            assert_eq!(
+                env_vars,
+                &[
+                    "COMPUTE_COMMUNITY_API_KEY",
+                    "COMPUTECOMMUNITY_API_KEY",
+                    "CC_API_KEY",
+                    "RUNPOD_QWEN_API_KEY"
+                ]
+            );
+        }
+        other => panic!("expected missing ComputeCommunity credentials, got {other:?}"),
+    }
 }
 
 #[test]
@@ -51,6 +103,20 @@ fn read_xai_base_url_prefers_env_override() {
     let _xai_base_url = EnvVarGuard::set("XAI_BASE_URL", Some("https://example.xai.test/v1"));
 
     assert_eq!(read_xai_base_url(), "https://example.xai.test/v1");
+}
+
+#[test]
+fn read_compute_community_qwen_base_url_prefers_env_override() {
+    let _lock = env_lock();
+    let _base_url = EnvVarGuard::set(
+        "COMPUTE_COMMUNITY_QWEN_BASE_URL",
+        Some("https://example.compute.test/v1"),
+    );
+
+    assert_eq!(
+        read_compute_community_qwen_base_url(),
+        "https://example.compute.test/v1"
+    );
 }
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {

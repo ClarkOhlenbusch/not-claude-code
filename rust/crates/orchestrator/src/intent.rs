@@ -62,8 +62,7 @@ pub fn classify(roles: &RoleConfig, user_message: &str) -> Intent {
         tool_choice: None,
         stream: false,
     };
-    let Ok(client) = ProviderClient::from_model_with_default_auth(&roles.intent_model, None)
-    else {
+    let Ok(client) = ProviderClient::from_model_with_default_auth(&roles.intent_model, None) else {
         return Intent::MultiStep;
     };
     let Ok(rt) = tokio::runtime::Builder::new_current_thread()
