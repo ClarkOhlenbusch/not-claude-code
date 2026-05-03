@@ -13,7 +13,8 @@ Phase 0 — base harness routing local models end-to-end via Ollama.
 | Build | green (`cargo build`) |
 | `claw --help` | works |
 | `claw "prompt"` against a local Ollama model | works |
-| Tool dispatch from local models | broken (format mismatch — see below) |
+| Tool dispatch from local models | works (text-JSON synthesis layer in OpenAI provider) |
+| Single-model agent loop converges reliably | no — small models pick wrong tools, loop without terminating |
 | Multi-model orchestrator | not started |
 | Benchmark harness | not started |
 
@@ -88,17 +89,14 @@ Surgery site: `crates/claw-cli/src/main.rs` `DefaultRuntimeClient::stream` (~lin
 
 ## Known issues
 
-**Tool calls don't dispatch from local models.** Qwen-7B emits tool calls as text JSON (with smart quotes), not as OpenAI's structured `tool_calls` field. Claw treats them as plain output and doesn't execute them. This blocks any prompt that needs file edits or shell exec. Two fixes possible:
+**Single-model agent loops don't converge.** Qwen-7B picks the wrong tool for a given task (e.g., chooses `SendUserMessage` to "answer" a "read this file" prompt) and re-emits the same tool call repeatedly without terminating. This is exactly what the multi-model orchestrator is designed to solve — a small router decides "this is a single-step task, stop after one tool call," and a bigger planner picks tools deliberately. Workaround for now: keep prompts conversational rather than agentic; don't ask single-model claw to do multi-step coding.
 
-1. Post-process model output: regex-extract JSON blocks, normalize quotes, dispatch as tool calls. Fragile but quick.
-2. Switch hot paths from Ollama to llama.cpp server with GBNF grammar to constrain output to valid `tool_calls` JSON. Cleaner, requires extra infra.
-
-Will be addressed alongside the orchestrator work — different roles need different output formats anyway.
+**Tool-call format synthesis is heuristic.** The OpenAI provider's stream parser detects text whose first non-whitespace char is `{` or ` ``` ` and tries to parse it as `{"name": ..., "arguments": ...}`. Works for Qwen2.5-Coder's typical output but won't catch every shape (e.g., a tool call preceded by chatty text like "Sure, I'll read that file: {json}" — the `{` isn't first). If the model's intent is ambiguous, set `OLLAMA_*` env vars to test other models. Long-term fix is GBNF grammar enforcement via llama.cpp server — slower path, cleaner result.
 
 ## Roadmap
 
 - [x] Build harness; route through Ollama; pass smoke test
-- [ ] Fix tool-call format mismatch (text JSON → structured)
+- [x] Synthesize structured tool_use events from text-JSON model output
 - [ ] Implement `LocalSwarmClient` that dispatches router → planner → patcher → reviewer per turn
 - [ ] Add tree-sitter repo map (port from Aider's algorithm)
 - [ ] Wire git worktrees per task for safe rollback
