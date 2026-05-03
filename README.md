@@ -69,8 +69,19 @@ Install the dedicated coinflip entry point when you want an explicit command for
 ```bash
 notclaude-coinflip
 notclaude-coinflip run "inspect this repo and propose the next benchmark"
-NOTCLAUDE_SWARM_ORCHESTRATOR=gpt-5.5 NOTCLAUDE_SWARM_MODELS=runpod-qwen36,gemma4:e2b notclaude-coinflip
 NOTCLAUDE_COINFLIP_MODEL=swarm notclaude-coinflip
+```
+
+On first launch, `notclaude-coinflip` runs a one-time Compute Community setup if no saved key is found. It stores the key at `~/.notclaude/coinflip.env` with `0600` permissions, then future launches are just:
+
+```bash
+notclaude-coinflip
+```
+
+The default coinflip lineup is GPT-5.5 as orchestrator and `runpod-qwen36` as the compute worker. To intentionally bypass compute and run GPT-only fallback:
+
+```bash
+NOTCLAUDE_COINFLIP_ALLOW_GPT_FALLBACK=1 notclaude-coinflip
 ```
 
 ### Remote Ollama compute
@@ -90,12 +101,12 @@ notclaude --model qwen3-coder:30b "summarize this repo"
 The Compute Community Runpod model is wired as an OpenAI-compatible endpoint:
 
 ```bash
-export COMPUTECOMMUNITY_API_KEY="cc_your_api_key"
+notclaude-coinflip
 notclaude --model qwen36
 notclaude --model qwen3.6 "summarize this repo"
 ```
 
-Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. Use `CC_API_KEY` instead of `COMPUTECOMMUNITY_API_KEY` if you prefer the shorter env var.
+Aliases `qwen36`, `qwen3.6`, and `runpod-qwen36` resolve to `Qwen/Qwen3.6-35B-A3B-FP8` at `https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1`. `notclaude-coinflip` reads `~/.notclaude/coinflip.env` automatically, so direct Qwen runs work after the same one-time setup. You can still use `COMPUTE_COMMUNITY_API_KEY`, `COMPUTECOMMUNITY_API_KEY`, or `CC_API_KEY` if you want to override the saved key for a single shell.
 
 ## Scriptable command-line runs
 

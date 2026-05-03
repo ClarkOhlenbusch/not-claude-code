@@ -43,13 +43,108 @@ fi
 INVOKED_NAME="$(basename "$0")"
 COMPUTE_QWEN36_MODEL="Qwen/Qwen3.6-35B-A3B-FP8"
 COMPUTE_QWEN36_BASE_URL="${COMPUTE_QWEN36_BASE_URL:-https://computecommunity.com/u/C7XfWXayLelTkySS7to8stLtwvV3Lj3J/nodes/runpod-qwen3-5-35b/v1}"
-COMPUTE_KEY="${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}"
 DEFAULT_MODEL="swarm"
+COINFLIP_CONFIG_DIR="${NOTCLAUDE_CONFIG_HOME:-$HOME/.notclaude}"
+COINFLIP_CONFIG_FILE="${NOTCLAUDE_COINFLIP_CONFIG:-$COINFLIP_CONFIG_DIR/coinflip.env}"
+
+load_coinflip_config_file() {
+  file="$1"
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ""|\#*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      COMPUTE_COMMUNITY_API_KEY|COMPUTECOMMUNITY_API_KEY|CC_API_KEY|COMPUTE_QWEN36_BASE_URL|COMPUTE_COMMUNITY_QWEN_BASE_URL|NOTCLAUDE_SWARM_MODELS|NOTCLAUDE_SWARM_ORCHESTRATOR) ;;
+      *) continue ;;
+    esac
+    case "$value" in
+      \"*\") value="${value#\"}"; value="${value%\"}" ;;
+      \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    esac
+    if [ -z "${!key:-}" ]; then
+      export "$key=$value"
+    fi
+  done <"$file"
+}
+
+resolve_compute_key() {
+  printf '%s' "${COMPUTE_COMMUNITY_API_KEY:-${COMPUTECOMMUNITY_API_KEY:-${CC_API_KEY:-}}}"
+}
+
+save_coinflip_compute_key() {
+  key="$1"
+  mkdir -p "$COINFLIP_CONFIG_DIR"
+  umask 077
+  {
+    printf 'COMPUTE_COMMUNITY_API_KEY=%s\n' "$key"
+    printf 'COMPUTE_QWEN36_BASE_URL=%s\n' "$COMPUTE_QWEN36_BASE_URL"
+  } >"$COINFLIP_CONFIG_FILE"
+  chmod 600 "$COINFLIP_CONFIG_FILE" 2>/dev/null || true
+}
+
+ensure_coinflip_compute_key() {
+  compute_key="$(resolve_compute_key)"
+  if [ -n "$compute_key" ]; then
+    export COMPUTE_COMMUNITY_API_KEY="$compute_key"
+    return 0
+  fi
+
+  if [ -t 0 ] && [ -t 1 ]; then
+    echo "notclaude-coinflip: one-time compute setup"
+    echo "This stores the Compute Community key in $COINFLIP_CONFIG_FILE for future one-command launches."
+    printf "Compute Community API key: "
+    stty_state="$(stty -g 2>/dev/null || true)"
+    stty -echo 2>/dev/null || true
+    IFS= read -r compute_key
+    if [ -n "$stty_state" ]; then
+      stty "$stty_state" 2>/dev/null || true
+    else
+      stty echo 2>/dev/null || true
+    fi
+    printf '\n'
+    if [ -n "$compute_key" ]; then
+      save_coinflip_compute_key "$compute_key"
+      export COMPUTE_COMMUNITY_API_KEY="$compute_key"
+      echo "notclaude-coinflip: saved compute config"
+      return 0
+    fi
+  fi
+
+  echo "notclaude-coinflip: missing Compute Community API key for $COMPUTE_QWEN36_MODEL" >&2
+  echo "  Run interactive setup once: notclaude-coinflip" >&2
+  echo "  Or write $COINFLIP_CONFIG_FILE with COMPUTE_COMMUNITY_API_KEY=cc_your_api_key" >&2
+  echo "  To intentionally use GPT-only fallback: NOTCLAUDE_COINFLIP_ALLOW_GPT_FALLBACK=1 notclaude-coinflip" >&2
+  exit 1
+}
+
+load_coinflip_config_file "$REPO_ROOT/.notclaude/coinflip.env"
+load_coinflip_config_file "$COINFLIP_CONFIG_FILE"
+COMPUTE_QWEN36_BASE_URL="${COMPUTE_COMMUNITY_QWEN_BASE_URL:-$COMPUTE_QWEN36_BASE_URL}"
+COMPUTE_KEY="$(resolve_compute_key)"
+
+WANTS_HELP_OR_VERSION=0
+for arg in "$@"; do
+  case "$arg" in
+    --version|-V|--help|-h)
+      WANTS_HELP_OR_VERSION=1
+      break
+      ;;
+  esac
+done
 
 if [ "$INVOKED_NAME" = "notclaude-coinflip" ] || [ "${NOTCLAUDE_COINFLIP_LAUNCHER:-0}" = "1" ]; then
   export NOTCLAUDE_COINFLIP_LAUNCHER=1
   export NOTCLAUDE_SWARM="${NOTCLAUDE_SWARM:-1}"
   export NOTCLAUDE_SWARM_ORCHESTRATOR="${NOTCLAUDE_SWARM_ORCHESTRATOR:-gpt-5.5}"
+  if [ "$WANTS_HELP_OR_VERSION" -eq 0 ] && [ -z "$COMPUTE_KEY" ] && [ "${NOTCLAUDE_COINFLIP_ALLOW_GPT_FALLBACK:-0}" != "1" ]; then
+    ensure_coinflip_compute_key
+    COMPUTE_KEY="$(resolve_compute_key)"
+  fi
   if [ -z "${NOTCLAUDE_SWARM_MODELS:-}" ]; then
     if [ -n "$COMPUTE_KEY" ]; then
       export NOTCLAUDE_SWARM_MODELS="runpod-qwen36"
