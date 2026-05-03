@@ -149,6 +149,7 @@ impl SystemPromptBuilder {
         }
         sections.push(get_simple_system_section());
         sections.push(get_simple_doing_tasks_section());
+        sections.push(get_using_your_tools_section());
         sections.push(get_actions_section());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
@@ -486,6 +487,32 @@ fn get_simple_doing_tasks_section() -> String {
     ]);
 
     std::iter::once("# Doing tasks".to_string())
+        .chain(items)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Tells the model exactly which tool to use for which job. Without this,
+/// small local models pick the wrong tool, narrate "you should do X" instead
+/// of acting, or fall back to bash for everything. Mirrors Claude Code's
+/// `getUsingYourToolsSection` from src/constants/prompts.ts.
+fn get_using_your_tools_section() -> String {
+    let provided = prepend_bullets(vec![
+        "To read files, use the read_file tool — do NOT use cat, head, tail, or sed via bash.".to_string(),
+        "To edit files, use the edit_file tool — do NOT use sed or awk via bash.".to_string(),
+        "To create files, use the write_file tool — do NOT use bash heredoc or echo redirection.".to_string(),
+        "To search filenames, use the glob_search tool — do NOT use find or ls via bash.".to_string(),
+        "To search file contents, use the grep_search tool — do NOT use grep or rg via bash.".to_string(),
+        "Reserve the bash tool exclusively for system commands and terminal operations that require shell execution. If a dedicated tool exists for the task, use it instead of bash.".to_string(),
+    ]);
+    let items = prepend_bullets(vec![
+        "Do NOT use the bash tool to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL:".to_string(),
+        provided.join("\n"),
+        "When you decide to use a tool, you MUST emit a structured tool call (the host harness handles dispatch). Do not narrate \"I will use the X tool\" without actually calling it, and do not say \"I cannot access files\" — your tools have been granted permissions for this session.".to_string(),
+        "You can call multiple tools in a single response when their inputs do not depend on each other's outputs. If one tool's result feeds into another, call them sequentially across turns instead.".to_string(),
+        "After a tool returns, briefly state what changed and either invoke the next required tool or stop. Do not repeat the same tool call unless an explicit retry is warranted.".to_string(),
+    ]);
+    std::iter::once("# Using your tools".to_string())
         .chain(items)
         .collect::<Vec<_>>()
         .join("\n")
