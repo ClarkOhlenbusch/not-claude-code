@@ -9,6 +9,7 @@ Suggested manual loop:
 
 ```bash
 notclaude-coinflip run "$(cat bench_real/simple_prompt.txt)"
+notclaude-coinflip run "$(cat bench_real/moderate_prompt.txt)"
 notclaude-coinflip run "$(cat bench_real/complex_prompt.txt)"
 notclaude-coinflip run "$(cat bench_real/more_complex_prompt.txt)"
 ```
