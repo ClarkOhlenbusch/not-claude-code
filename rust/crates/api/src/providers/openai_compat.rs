@@ -515,56 +515,73 @@ impl StreamState {
     }
 
     /// If we buffered text that started with `{` or a code fence, try to
-    /// extract a tool call. Returns true if synthesis succeeded (caller should
-    /// skip text emission).
+    /// extract one or more tool calls. Returns true if at least one tool_use
+    /// was synthesized (caller should skip text emission).
+    ///
+    /// Handles the case where a model emits multiple concatenated tool calls
+    /// in a single response, e.g. `{...}{...}` for "write a file then run it".
+    /// Each balanced top-level `{}` block is parsed independently.
     fn try_synthesize_tool_use(&mut self, events: &mut Vec<StreamEvent>) -> bool {
         if self.buffer_mode != TextBufferMode::Buffering || self.text_buffer.is_empty() {
             return false;
         }
         let cleaned = strip_code_fences(self.text_buffer.trim());
-        // Models (Qwen especially) sometimes emit JSON with Unicode smart
-        // quotes — normalize to ASCII before parse.
         let normalized = normalize_smart_quotes(cleaned);
-        let Ok(value) = serde_json::from_str::<Value>(&normalized) else {
+        let blocks = extract_balanced_json_blocks(&normalized);
+        if blocks.is_empty() {
             return false;
-        };
-        // Accept either {"name":"...","arguments":{...}} (Qwen / common shape)
-        // or {"function":"...","arguments":{...}} or {"name":"...","parameters":{...}}.
-        let name = value
-            .get("name")
-            .or_else(|| value.get("function"))
-            .and_then(Value::as_str);
-        let args = value
-            .get("arguments")
-            .or_else(|| value.get("parameters"))
-            .or_else(|| value.get("args"));
-        let (Some(name), Some(args)) = (name, args) else {
+        }
+        // Each successful parse becomes a content block at a fresh index.
+        // We allocate sequentially starting at 0; text was suppressed in this
+        // mode so there's no other block 0 to collide with.
+        let mut next_index: u32 = 0;
+        let mut any_emitted = false;
+        for block in blocks {
+            let Ok(value) = serde_json::from_str::<Value>(block) else {
+                continue;
+            };
+            let name = value
+                .get("name")
+                .or_else(|| value.get("function"))
+                .and_then(Value::as_str);
+            let args = value
+                .get("arguments")
+                .or_else(|| value.get("parameters"))
+                .or_else(|| value.get("args"));
+            let (Some(name), Some(args)) = (name, args) else {
+                continue;
+            };
+            let id = format!(
+                "call_synth_{}_{next_index}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            );
+            let idx = next_index;
+            events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
+                index: idx,
+                content_block: OutputContentBlock::ToolUse {
+                    id,
+                    name: name.to_string(),
+                    input: Value::Object(serde_json::Map::new()),
+                },
+            }));
+            events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
+                index: idx,
+                delta: ContentBlockDelta::InputJsonDelta {
+                    partial_json: args.to_string(),
+                },
+            }));
+            events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
+                index: idx,
+            }));
+            next_index += 1;
+            any_emitted = true;
+        }
+        if !any_emitted {
             return false;
-        };
-        let id = format!(
-            "call_synth_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
-        events.push(StreamEvent::ContentBlockStart(ContentBlockStartEvent {
-            index: 0,
-            content_block: OutputContentBlock::ToolUse {
-                id,
-                name: name.to_string(),
-                input: Value::Object(serde_json::Map::new()),
-            },
-        }));
-        events.push(StreamEvent::ContentBlockDelta(ContentBlockDeltaEvent {
-            index: 0,
-            delta: ContentBlockDelta::InputJsonDelta {
-                partial_json: args.to_string(),
-            },
-        }));
-        events.push(StreamEvent::ContentBlockStop(ContentBlockStopEvent {
-            index: 0,
-        }));
+        }
         self.synthesized_tool_use = true;
         self.stop_reason = Some("tool_use".to_string());
         self.text_buffer.clear();
@@ -1088,6 +1105,52 @@ fn normalize_finish_reason(value: &str) -> String {
         other => other,
     }
     .to_string()
+}
+
+/// Walk `s` and return each balanced top-level `{...}` block as a substring.
+/// Skips braces inside JSON string literals (handles `\"` escapes correctly).
+/// Anything outside of a balanced block (preamble whitespace, commentary
+/// between blocks, etc.) is ignored.
+fn extract_balanced_json_blocks(s: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut depth: u32 = 0;
+    let mut start: Option<usize> = None;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (i, c) in s.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if in_string {
+            match c {
+                '\\' => escape_next = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth = depth.saturating_add(1);
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(s_idx) = start.take() {
+                        let end = i + c.len_utf8();
+                        blocks.push(&s[s_idx..end]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks
 }
 
 /// Earliest index in `s` of a tool-call onset marker. We look for either
