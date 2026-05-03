@@ -1381,6 +1381,7 @@ impl LiveCli {
             TerminalRenderer::new().color_theme(),
             &mut stdout,
         )?;
+        spinner.finish("", TerminalRenderer::new().color_theme(), &mut stdout)?;
         let mut permission_prompter = CliPermissionPrompter::new(self.permission_mode);
         let result = self.runtime.run_turn(input, Some(&mut permission_prompter));
         match result {
@@ -3554,9 +3555,7 @@ fn is_swarm_model(model: &str) -> bool {
     matches!(
         model,
         "coinflip" | "notclaude-coinflip" | "swarm" | "local-swarm" | "orchestrator"
-    ) || env::var("NOTCLAUDE_SWARM")
-        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
-        .unwrap_or(false)
+    )
 }
 
 async fn send_model_message(
