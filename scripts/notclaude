@@ -27,7 +27,13 @@ if ! curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null; then
     exit 1
   fi
   echo "notclaude: starting ollama server..." >&2
-  ollama serve >/dev/null 2>&1 &
+  # OLLAMA_CONTEXT_LENGTH: bump from default 4096 to 32K so models can hold
+  #   the whole system prompt + tool definitions + multi-turn results without
+  #   truncating. The default 4K causes catastrophic slowness (model
+  #   re-thinks each turn because earlier context fell off).
+  # OLLAMA_KEEP_ALIVE: keep the model resident across prompts so we don't
+  #   pay the ~10s cold-load cost between turns.
+  OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_KEEP_ALIVE=24h ollama serve >/dev/null 2>&1 &
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
     curl -sf -o /dev/null "$OLLAMA_URL/api/tags" 2>/dev/null && break
