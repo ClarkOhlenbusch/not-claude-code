@@ -27,13 +27,17 @@ use std::hash::{Hash, Hasher};
 use runtime::{ApiClient, ApiRequest, AssistantEvent, ConversationMessage, ContentBlock, RuntimeError};
 
 use crate::events::prepend_role_banner;
+use crate::intent::{self, Intent};
 use crate::planner::{self, Spec};
 use crate::reviewer::{self, ReviewOutcome, MAX_RETRIES_PER_TURN};
 use crate::roles::RoleConfig;
 
 #[derive(Default)]
 struct State {
-    /// Spec extracted by planner for the current turn. None = haven't planned yet.
+    /// Classified intent for this turn. None = haven't classified yet.
+    intent: Option<Intent>,
+    /// Spec extracted by planner for the current turn. None = no spec
+    /// (either chat intent, or planner failed gracefully).
     spec: Option<Spec>,
     /// Number of reviewer-driven retries used this turn.
     retries_used: u32,
@@ -102,18 +106,24 @@ impl ApiClient for OrchestratorRuntime {
         let user_hash = user_msg.as_deref().map(hash_str);
 
         // New-turn detection: user message hash changed (or never set) →
-        // reset state and re-plan.
+        // reset state, classify intent, and (if non-chat) re-plan.
         if user_hash != self.state.last_user_msg_hash {
             self.state = State::default();
             self.state.last_user_msg_hash = user_hash;
             if let Some(msg) = &user_msg {
-                match planner::extract_spec(&self.roles, msg) {
-                    Ok(spec) => self.state.spec = Some(spec),
-                    Err(e) => {
-                        // Planner failure is non-fatal — proceed without a spec.
-                        // Coder gets the original prompt only. Better degraded
-                        // than failed.
-                        eprintln!("\n[role:planner] failed: {e}\n");
+                // Phase 2: intent classifier. Chat prompts (e.g. "what's 2+2",
+                // "explain X") skip the planner+reviewer overhead entirely.
+                let intent = intent::classify(&self.roles, msg);
+                self.state.intent = Some(intent);
+                if intent.needs_planning() {
+                    match planner::extract_spec(&self.roles, msg) {
+                        Ok(spec) => self.state.spec = Some(spec),
+                        Err(e) => {
+                            // Planner failure is non-fatal — proceed without a
+                            // spec. Coder gets the original prompt only. Better
+                            // degraded than failed.
+                            eprintln!("\n[role:planner] failed: {e}\n");
+                        }
                     }
                 }
             }
