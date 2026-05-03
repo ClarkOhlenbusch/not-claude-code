@@ -475,6 +475,16 @@ fn resolve_model_alias(model: &str) -> String {
     }
 }
 
+fn display_model_label(model: &str) -> String {
+    if matches!(model, "swarm" | "notclaude-swarm")
+        && env::var("NOTCLAUDE_COINFLIP_LAUNCHER").ok().as_deref() == Some("1")
+    {
+        "coinflip".to_string()
+    } else {
+        model.to_string()
+    }
+}
+
 fn is_ollama_target(model: &str) -> bool {
     matches!(api::detect_provider_kind(model), api::ProviderKind::Ollama)
 }
@@ -1265,7 +1275,10 @@ fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
     println!("\r{dim_open}{}{dim_close}", "─".repeat(term_width));
 
     let left = "? for shortcuts";
-    let right = format!("{orange_dot} {dim_open}{}{dim_close}", cli.model);
+    let right = format!(
+        "{orange_dot} {dim_open}{}{dim_close}",
+        cli.display_model_label()
+    );
     let left_visible = visible_width(left);
     let right_visible = visible_width(&right);
     let pad = term_width.saturating_sub(left_visible + right_visible + 4);
@@ -1367,10 +1380,14 @@ impl LiveCli {
             color,
             term_width,
             username: &username,
-            model: &self.model,
+            model: &self.display_model_label(),
             cwd: &cwd_display,
             has_claw_md,
         })
+    }
+
+    fn display_model_label(&self) -> String {
+        display_model_label(&self.model)
     }
 
     fn run_turn(&mut self, input: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1580,7 +1597,7 @@ impl LiveCli {
         println!(
             "{}",
             format_status_report(
-                &self.model,
+                &self.display_model_label(),
                 StatusUsage {
                     message_count: self.runtime.session().messages.len(),
                     turns: self.runtime.usage().turns(),
@@ -3621,8 +3638,13 @@ fn build_swarm_worker_request(
 ) -> MessageRequest {
     let mut system = base_request.system.clone().unwrap_or_default();
     system.push_str("\n\nSwarm orchestration context:\n");
-    system.push_str("You are a worker model inside a GPT-5.5 orchestrated local swarm. Produce the best direct answer or tool calls for this attempt.\n");
+    system.push_str("You are a worker model inside the NOT Claude Code coinflip swarm. Produce the best direct answer or tool calls for this attempt.\n");
+    system.push_str(&format!(
+        "Swarm orchestrator model: {}\n",
+        swarm.orchestrator_model
+    ));
     system.push_str("Do not mention the swarm unless it is directly useful to the user.\n");
+    system.push_str("If the user asks what model/system is running, answer that this is NOT Claude Code coinflip swarm mode, name the orchestrator model and current worker model from this context, and do not claim to be the generic frontier model from the base environment prompt unless that exact model is listed here.\n");
     system.push_str(&format!("Current worker model: {worker_model}\n"));
     system.push_str(&format!("Attempt number: {}\n", attempt_index + 1));
     if let Some(context) = &swarm.distilled_context {
@@ -5108,18 +5130,19 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        describe_tool_progress, filter_tool_specs, format_compact_report, format_cost_report,
-        format_internal_prompt_progress_line, format_model_report, format_model_switch_report,
-        format_permissions_report, format_permissions_switch_report, format_resume_report,
-        format_status_report, format_tool_call_start, format_tool_result, is_swarm_model,
-        normalize_permission_mode, parse_args, parse_git_status_metadata, permission_policy,
-        print_help_to, push_output_block, render_config_report, render_memory_report,
-        render_repl_help, render_unknown_repl_command, resolve_model_alias, response_to_events,
-        resume_supported_slash_commands, slash_command_completion_candidates, status_context,
-        CliAction, CliOutputFormat, InternalPromptProgressEvent, InternalPromptProgressState,
-        PromptInput, SlashCommand, StatusUsage, DEFAULT_MODEL,
+        build_swarm_worker_request, describe_tool_progress, display_model_label, filter_tool_specs,
+        format_compact_report, format_cost_report, format_internal_prompt_progress_line,
+        format_model_report, format_model_switch_report, format_permissions_report,
+        format_permissions_switch_report, format_resume_report, format_status_report,
+        format_tool_call_start, format_tool_result, is_swarm_model, normalize_permission_mode,
+        parse_args, parse_git_status_metadata, permission_policy, print_help_to, push_output_block,
+        render_config_report, render_memory_report, render_repl_help, render_unknown_repl_command,
+        resolve_model_alias, response_to_events, resume_supported_slash_commands,
+        slash_command_completion_candidates, status_context, CliAction, CliOutputFormat,
+        InternalPromptProgressEvent, InternalPromptProgressState, PromptInput, SlashCommand,
+        StatusUsage, SwarmState, DEFAULT_MODEL,
     };
-    use api::{MessageResponse, OutputContentBlock, Usage};
+    use api::{InputMessage, MessageRequest, MessageResponse, OutputContentBlock, Usage};
     use plugins::{PluginTool, PluginToolDefinition, PluginToolPermission};
     use runtime::{AssistantEvent, ContentBlock, ConversationMessage, MessageRole, PermissionMode};
     use serde_json::json;
@@ -5319,6 +5342,24 @@ mod tests {
     }
 
     #[test]
+    fn coinflip_launcher_displays_coinflip_for_swarm_model() {
+        let _lock = env_lock();
+        let _coinflip = EnvVarGuard::set("NOTCLAUDE_COINFLIP_LAUNCHER", Some("1"));
+
+        assert_eq!(display_model_label("swarm"), "coinflip");
+        assert_eq!(display_model_label("notclaude-swarm"), "coinflip");
+        assert_eq!(display_model_label("gpt-5.5"), "gpt-5.5");
+    }
+
+    #[test]
+    fn non_coinflip_swarm_display_stays_swarm() {
+        let _lock = env_lock();
+        let _coinflip = EnvVarGuard::set("NOTCLAUDE_COINFLIP_LAUNCHER", None);
+
+        assert_eq!(display_model_label("swarm"), "swarm");
+    }
+
+    #[test]
     fn swarm_env_flag_does_not_mark_worker_models_as_swarm() {
         let _lock = env_lock();
         let _swarm = EnvVarGuard::set("NOTCLAUDE_SWARM", Some("1"));
@@ -5328,6 +5369,37 @@ mod tests {
         assert!(!is_swarm_model("gpt-5.5"));
         assert!(!is_swarm_model("Qwen/Qwen3.6-35B-A3B-FP8"));
         assert!(!is_swarm_model("gemma4:e2b"));
+    }
+
+    #[test]
+    fn swarm_worker_prompt_answers_identity_from_swarm_context() {
+        let swarm = SwarmState {
+            orchestrator_model: "gpt-5.5".to_string(),
+            worker_models: vec!["Qwen/Qwen3.6-35B-A3B-FP8".to_string()],
+            max_attempts: 4,
+            active_worker_model: None,
+            last_failed_model: None,
+            distilled_context: Some("Answer the user directly.".to_string()),
+            attempt_ledger: Vec::new(),
+        };
+        let request = MessageRequest {
+            model: "swarm".to_string(),
+            max_tokens: 1000,
+            messages: vec![InputMessage::user_text("what model are you running on")],
+            system: Some("Model family: Opus 4.6".to_string()),
+            tools: None,
+            tool_choice: None,
+            stream: false,
+        };
+
+        let worker_request =
+            build_swarm_worker_request(&request, &swarm, "Qwen/Qwen3.6-35B-A3B-FP8", 0);
+        let system = worker_request.system.expect("system prompt");
+
+        assert!(system.contains("NOT Claude Code coinflip swarm mode"));
+        assert!(system.contains("Swarm orchestrator model: gpt-5.5"));
+        assert!(system.contains("Current worker model: Qwen/Qwen3.6-35B-A3B-FP8"));
+        assert!(system.contains("do not claim to be the generic frontier model"));
     }
 
     #[test]

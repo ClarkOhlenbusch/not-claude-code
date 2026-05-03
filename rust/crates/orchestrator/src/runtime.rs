@@ -128,8 +128,11 @@ impl ApiClient for OrchestratorRuntime {
             }
         }
 
-        // Inject the spec into the inner client's system prompt.
+        // Inject orchestration context into the inner client's system prompt.
         let mut augmented_request = request;
+        augmented_request
+            .system_prompt
+            .push(render_orchestration_identity_context(&self.roles));
         if let Some(spec) = &self.state.spec {
             augmented_request
                 .system_prompt
@@ -203,6 +206,18 @@ fn request_has_tool_result(request: &ApiRequest) -> bool {
     })
 }
 
+fn render_orchestration_identity_context(roles: &RoleConfig) -> String {
+    format!(
+        "# NOT Claude Code coinflip swarm context\n\
+         - Runtime mode: coinflip swarm.\n\
+         - Orchestrator model: {}.\n\
+         - Current worker model: {}.\n\
+         - If the user asks what model/system is running, say this is NOT Claude Code coinflip swarm mode and include the orchestrator and current worker model from this section.\n\
+         - Do not claim to be the generic frontier model from the base environment prompt unless that exact model is listed in this section.",
+        roles.planner_model, roles.coder_model
+    )
+}
+
 /// Build a short summary of what the coder did, suitable for the reviewer.
 /// Includes any tool_use names and the text content (first 1500 chars).
 fn summarize_events(events: &[AssistantEvent]) -> String {
@@ -230,6 +245,7 @@ fn summarize_events(events: &[AssistantEvent]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     /// Minimal scripted ApiClient used in tests — returns events from `script`
     /// in order, errors when exhausted.
@@ -249,6 +265,23 @@ mod tests {
                 return Err(RuntimeError::new("scripted client exhausted"));
             }
             Ok(self.script.remove(0))
+        }
+    }
+
+    struct CapturingClient {
+        seen: Arc<Mutex<Vec<ApiRequest>>>,
+    }
+
+    impl ApiClient for CapturingClient {
+        fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(request);
+            Ok(vec![
+                AssistantEvent::TextDelta("hi".into()),
+                AssistantEvent::MessageStop,
+            ])
         }
     }
 
@@ -282,6 +315,40 @@ mod tests {
             })
             .unwrap();
         assert_eq!(events, vec![AssistantEvent::TextDelta("hi".into())]);
+    }
+
+    #[test]
+    fn active_mode_injects_coinflip_identity_context() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let inner = CapturingClient {
+            seen: Arc::clone(&seen),
+        };
+        let roles = RoleConfig {
+            planner_model: "gpt-5.5".into(),
+            coder_model: "runpod-qwen36".into(),
+            ..RoleConfig::default()
+        };
+        let mut rt = OrchestratorRuntime::with_orchestration_enabled(Box::new(inner), roles);
+
+        let events = rt
+            .stream(ApiRequest {
+                system_prompt: vec!["Model family: Opus 4.6".into()],
+                messages: vec![],
+            })
+            .unwrap();
+
+        assert_eq!(
+            events.first(),
+            Some(&AssistantEvent::TextDelta("hi".into()))
+        );
+        let requests = seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let system = requests[0].system_prompt.join("\n");
+        assert!(system.contains("Runtime mode: coinflip swarm"));
+        assert!(system.contains("Orchestrator model: gpt-5.5"));
+        assert!(system.contains("Current worker model: runpod-qwen36"));
+        assert!(system.contains("Do not claim to be the generic frontier model"));
     }
 
     #[test]
