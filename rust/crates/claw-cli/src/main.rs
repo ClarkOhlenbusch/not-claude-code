@@ -3086,9 +3086,9 @@ fn build_runtime(
     // single inner with role-specific calls.
     let is_swarm = matches!(model.as_str(), "swarm" | "notclaude-swarm");
     let coder_model = if is_swarm {
-        // Phase 1 default: route the swarm path's coder role through the
-        // bench-proven 14B. Phase 3+ will pull this from RoleConfig.
-        "qwen2.5-coder:14b".to_string()
+        // Pull from RoleConfig::default() so updates to the swarm's coder
+        // model live in one place (orchestrator/src/roles.rs).
+        orchestrator::RoleConfig::default().coder_model
     } else {
         model.clone()
     };

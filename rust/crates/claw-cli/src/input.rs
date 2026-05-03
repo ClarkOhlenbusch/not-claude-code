@@ -183,9 +183,15 @@ impl EditSession {
 
         let prompt = self.prompt(base_prompt, vim_enabled);
         let buffer = self.visible_buffer();
-        write!(out, "{prompt}{buffer}")?;
+        let width = terminal_width();
+        // Raw mode disables OPOST, so bare `\n` won't return to column 0.
+        // Emit `\r\n` for embedded newlines so cursor_layout's column math
+        // matches what's on screen.
+        write_with_crlf(out, prompt.as_ref())?;
+        write_with_crlf(out, buffer.as_ref())?;
 
-        let (cursor_row, cursor_col, total_lines) = self.cursor_layout(prompt.as_ref());
+        let (cursor_row, cursor_col, total_lines) =
+            self.cursor_layout(prompt.as_ref(), width);
         let rows_to_move_up = total_lines.saturating_sub(cursor_row + 1);
         if rows_to_move_up > 0 {
             queue!(out, MoveUp(to_u16(rows_to_move_up)?))?;
@@ -207,11 +213,20 @@ impl EditSession {
         self.clear_render(out)?;
         let prompt = self.prompt(base_prompt, vim_enabled);
         let buffer = self.visible_buffer();
-        write!(out, "{prompt}{buffer}")?;
+        write_with_crlf(out, prompt.as_ref())?;
+        write_with_crlf(out, buffer.as_ref())?;
         writeln!(out)
     }
 
-    fn cursor_layout(&self, prompt: &str) -> (usize, usize, usize) {
+    /// Compute cursor's physical (row, col) and the total number of physical
+    /// rows occupied by the rendered prompt + buffer, accounting for both
+    /// explicit newlines and terminal autowrap at `term_width` columns.
+    ///
+    /// Without the width-aware walk, typing past the right edge of the
+    /// terminal kept `rendered_cursor_row` stuck at 0, so `clear_render`
+    /// failed to wipe the wrapped rows on the next redraw and the input
+    /// appeared to repeat down the screen.
+    fn cursor_layout(&self, prompt: &str, term_width: usize) -> (usize, usize, usize) {
         let active_text = self.active_text();
         let cursor = if self.mode == EditorMode::Command {
             self.command_cursor
@@ -219,15 +234,53 @@ impl EditSession {
             self.cursor
         };
 
-        let cursor_prefix = &active_text[..cursor];
-        let cursor_row = cursor_prefix.bytes().filter(|byte| *byte == b'\n').count();
-        let cursor_col = match cursor_prefix.rsplit_once('\n') {
-            Some((_, suffix)) => suffix.chars().count(),
-            None => visible_prompt_width(prompt) + cursor_prefix.chars().count(),
-        };
-        let total_lines = active_text.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        let width = term_width.max(1);
+        let prompt_width = visible_prompt_width(prompt);
+
+        let mut row = 0usize;
+        let mut col = prompt_width;
+        let mut cursor_row = 0usize;
+        let mut cursor_col = prompt_width;
+        let mut captured = false;
+
+        for (idx, ch) in active_text.char_indices() {
+            if idx == cursor {
+                cursor_row = row;
+                cursor_col = col;
+                captured = true;
+            }
+            if ch == '\n' {
+                row += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if col >= width {
+                    row += 1;
+                    col = 0;
+                }
+            }
+        }
+        if !captured {
+            cursor_row = row;
+            cursor_col = col;
+        }
+        let total_lines = row + 1;
         (cursor_row, cursor_col, total_lines)
     }
+}
+
+fn terminal_width() -> usize {
+    terminal::size().map(|(cols, _)| cols as usize).unwrap_or(80)
+}
+
+fn write_with_crlf(out: &mut impl Write, text: &str) -> io::Result<()> {
+    let mut start = 0;
+    for (idx, _) in text.match_indices('\n') {
+        out.write_all(text[start..idx].as_bytes())?;
+        out.write_all(b"\r\n")?;
+        start = idx + 1;
+    }
+    out.write_all(text[start..].as_bytes())
 }
 
 /// Visible width of a prompt string, skipping ANSI escape sequences.
@@ -1196,6 +1249,39 @@ mod tests {
         // then
         assert_eq!(first, "/permissions");
         assert_eq!(second, "/plugin");
+    }
+
+    #[test]
+    fn cursor_layout_wraps_when_text_exceeds_terminal_width() {
+        // given a 5-column terminal, prompt "> " (width 2), and 8 chars typed
+        let mut session = EditSession::new(false);
+        session.text = "abcdefgh".to_string();
+        session.cursor = session.text.len();
+
+        // when
+        let (cursor_row, cursor_col, total_lines) = session.cursor_layout("> ", 5);
+
+        // then: prompt+8 chars = 10 columns over a width-5 terminal → 2 rows.
+        // Cursor sits at row 1, col 5 → wrapped to row 2, col 0.
+        assert_eq!(cursor_row, 2);
+        assert_eq!(cursor_col, 0);
+        assert_eq!(total_lines, 3);
+    }
+
+    #[test]
+    fn cursor_layout_handles_explicit_newlines_in_buffer() {
+        // given
+        let mut session = EditSession::new(false);
+        session.text = "abc\ndef".to_string();
+        session.cursor = 5; // between 'd' and 'e'
+
+        // when
+        let (cursor_row, cursor_col, total_lines) = session.cursor_layout("> ", 80);
+
+        // then
+        assert_eq!(cursor_row, 1);
+        assert_eq!(cursor_col, 1);
+        assert_eq!(total_lines, 2);
     }
 
     #[test]

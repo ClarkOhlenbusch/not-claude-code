@@ -25,11 +25,12 @@ pub struct RoleConfig {
 }
 
 impl Default for RoleConfig {
-    /// Phase-1 default: every role points at the bench-proven 14B coder.
+    /// Default: every role shares Qwen3.6-35B-A3B (May 2026 frontier
+    /// agentic coder — 3B active MoE, ~20 GB Q4, 73.4 on SWE-Bench Verified).
     /// Specialization comes from per-role prompts, not different weights —
-    /// proves the orchestration path before introducing model swaps.
+    /// keeps a single model resident in memory (no swap cost).
     fn default() -> Self {
-        let baseline = "qwen2.5-coder:14b".to_string();
+        let baseline = "qwen3.6:35b-a3b".to_string();
         Self {
             intent_model: baseline.clone(),
             planner_model: baseline.clone(),
