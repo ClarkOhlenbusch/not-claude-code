@@ -1056,6 +1056,8 @@ fn run_repl(
 }
 
 /// Horizontal rule above the input prompt — matches Claude Code's input frame.
+/// Prefixed with `\r` to defensively reset cursor to col 0 even if some prior
+/// rendering left the cursor mid-line.
 fn print_input_frame_top(color: bool) {
     let term_width = crossterm::terminal::size()
         .map(|(cols, _)| cols as usize)
@@ -1063,10 +1065,10 @@ fn print_input_frame_top(color: bool) {
         .clamp(40, 200);
     let dim_open = if color { "\x1b[2m" } else { "" };
     let dim_close = if color { "\x1b[0m" } else { "" };
-    println!("{dim_open}{}{dim_close}", "─".repeat(term_width));
+    println!("\r{dim_open}{}{dim_close}", "─".repeat(term_width));
 }
 
-/// Horizontal rule + hint line below the input prompt.
+/// Horizontal rule + hint line below the input prompt. Same `\r` defense.
 fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
     let term_width = crossterm::terminal::size()
         .map(|(cols, _)| cols as usize)
@@ -1075,7 +1077,7 @@ fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
     let dim_open = if color { "\x1b[2m" } else { "" };
     let dim_close = if color { "\x1b[0m" } else { "" };
     let orange_dot = if color { "\x1b[38;2;217;119;87m●\x1b[0m" } else { "●" };
-    println!("{dim_open}{}{dim_close}", "─".repeat(term_width));
+    println!("\r{dim_open}{}{dim_close}", "─".repeat(term_width));
 
     let left = "? for shortcuts";
     let right = format!("{orange_dot} {dim_open}{}{dim_close}", cli.model);
@@ -1084,7 +1086,7 @@ fn print_input_frame_bottom(color: bool, cli: &LiveCli) {
     let pad = term_width
         .saturating_sub(left_visible + right_visible + 4);
     println!(
-        "{dim_open}  {left}{}{}{dim_close}",
+        "\r{dim_open}  {left}{}{}{dim_close}",
         " ".repeat(pad),
         right,
     );
@@ -3769,6 +3771,7 @@ fn format_tool_result(name: &str, output: &str, is_error: bool) -> String {
         "edit_file" | "Edit" => format_edit_result(icon, &parsed),
         "glob_search" | "Glob" => format_glob_result(icon, &parsed),
         "grep_search" | "Grep" => format_grep_result(icon, &parsed),
+        "web_search" | "WebSearch" => format_web_search_result(icon, &parsed),
         _ => format_generic_tool_result(icon, name, &parsed),
     }
 }
@@ -4038,27 +4041,69 @@ fn format_grep_result(icon: &str, parsed: &serde_json::Value) -> String {
 }
 
 fn format_generic_tool_result(icon: &str, name: &str, parsed: &serde_json::Value) -> String {
-    let rendered_output = match parsed {
-        serde_json::Value::String(text) => text.clone(),
+    // Compact view for unknown tools: a single one-liner summary, never the
+    // full pretty-printed JSON. Claude Code shows tool results as terse
+    // confirmations; the model gets the full payload internally either way.
+    const GENERIC_MAX_CHARS: usize = 120;
+    let summary = match parsed {
+        serde_json::Value::String(text) => truncate_for_summary(text.trim(), GENERIC_MAX_CHARS),
         serde_json::Value::Null => String::new(),
-        serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-            serde_json::to_string_pretty(parsed).unwrap_or_else(|_| parsed.to_string())
+        serde_json::Value::Object(map) => {
+            // Try common "result"/"output"/"content" keys first.
+            for key in ["result", "output", "content", "text", "message"] {
+                if let Some(v) = map.get(key).and_then(|v| v.as_str()) {
+                    return format!(
+                        "{icon} \x1b[38;5;245m{name}:\x1b[0m {}",
+                        truncate_for_summary(v.trim(), GENERIC_MAX_CHARS)
+                    );
+                }
+            }
+            // Fallback: just say "ok" with key count.
+            format!("{} keys", map.len())
         }
-        _ => parsed.to_string(),
+        serde_json::Value::Array(arr) => format!("{} items", arr.len()),
+        _ => truncate_for_summary(&parsed.to_string(), GENERIC_MAX_CHARS),
     };
-    let preview = truncate_output_for_display(
-        &rendered_output,
-        TOOL_OUTPUT_DISPLAY_MAX_LINES,
-        TOOL_OUTPUT_DISPLAY_MAX_CHARS,
-    );
-
-    if preview.is_empty() {
+    if summary.is_empty() {
         format!("{icon} \x1b[38;5;245m{name}\x1b[0m")
-    } else if preview.contains('\n') {
-        format!("{icon} \x1b[38;5;245m{name}\x1b[0m\n{preview}")
     } else {
-        format!("{icon} \x1b[38;5;245m{name}:\x1b[0m {preview}")
+        format!("{icon} \x1b[38;5;245m{name}:\x1b[0m \x1b[2m{summary}\x1b[0m")
     }
+}
+
+/// Compact WebSearch result: just `query → N results` with the first result's
+/// title/url, instead of dumping the full JSON.
+fn format_web_search_result(icon: &str, parsed: &serde_json::Value) -> String {
+    let query = parsed
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let results = parsed
+        .get("results")
+        .and_then(|v| v.as_array());
+    let count = results.map(|r| r.len()).unwrap_or(0);
+    let mut head = format!(
+        "{icon} \x1b[38;5;245mWebSearch\x1b[0m \x1b[2m\"{}\"\x1b[0m \x1b[38;5;245m→\x1b[0m {count} result{}",
+        truncate_for_summary(query, 60),
+        if count == 1 { "" } else { "s" }
+    );
+    // Show the first 3 result titles indented under, if available.
+    if let Some(arr) = results {
+        for r in arr.iter().take(3) {
+            if let Some(content) = r.get("content").and_then(|v| v.as_array()) {
+                for item in content.iter().take(3) {
+                    if let Some(title) = item.get("title").and_then(|v| v.as_str()) {
+                        head.push_str(&format!(
+                            "\n     \x1b[2m·\x1b[0m {}",
+                            truncate_for_summary(title, 80)
+                        ));
+                    }
+                }
+                break;
+            }
+        }
+    }
+    head
 }
 
 fn summarize_tool_payload(payload: &str) -> String {
