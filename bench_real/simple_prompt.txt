@@ -1,0 +1,8 @@
+Create a file at /Users/francescoduca/Documents/New project/bench_real/output/eval-simple/hello.py that prints
+"Hello from notclaudecode" when run. Then run it and show
+me the output.
+
+Success criteria:
+
+/Users/francescoduca/Documents/New project/bench_real/output/eval-simple/hello.py exists
+Running it prints exactly Hello from notclaudecode

@@ -1,0 +1,32 @@
+Build a Flask todo API in /Users/francescoduca/Documents/New project/bench_real/output/eval-complex/. Requirements:
+
+Create app.py with a Flask application that supports:
+GET /todos — returns a JSON array of all todos
+POST /todos — accepts JSON {"title": string}, creates a todo
+with an auto-incrementing integer id and the given title,
+returns the created todo as JSON
+DELETE /todos/<id> — deletes the todo with that id, returns
+204 on success or 404 if not found
+Use in-memory storage (a Python list or dict). No database.
+
+Create requirements.txt listing flask and pytest.
+
+Create tests/test_api.py with pytest tests using Flask's
+test_client that cover:
+Creating a todo via POST and verifying it appears in GET
+Creating two todos, deleting one, verifying only the other
+remains
+Attempting to delete a non-existent id returns 404
+
+Install dependencies and run the tests with pytest. All tests
+must pass.
+
+Confirm at the end that pytest exited with code 0 and all 3 tests
+passed.
+
+Success criteria (what you check after):
+
+/Users/francescoduca/Documents/New project/bench_real/output/eval-complex/app.py exists and imports without error
+/Users/francescoduca/Documents/New project/bench_real/output/eval-complex/tests/test_api.py exists
+Running pytest in the directory shows 3 tests, all passing
+All 3 endpoints actually work (you can spot-check with curl)
