@@ -66,6 +66,27 @@ fn main() {
     }
 }
 
+fn ensure_ollama_running() {
+    use std::net::TcpStream;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    if TcpStream::connect_timeout(
+        &"127.0.0.1:11434".parse().expect("valid socket addr"),
+        Duration::from_millis(150),
+    )
+    .is_ok()
+    {
+        return;
+    }
+    let _ = Command::new("ollama")
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+}
+
 fn render_cli_error(problem: &str) -> String {
     let mut lines = vec!["Error".to_string()];
     for (index, line) in problem.lines().enumerate() {
@@ -81,6 +102,7 @@ fn render_cli_error(problem: &str) -> String {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    ensure_ollama_running();
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args)? {
         CliAction::DumpManifests => dump_manifests(),
@@ -731,6 +753,9 @@ Aliases
   opus             claude-opus-4-6
   sonnet           claude-sonnet-4-6
   haiku            claude-haiku-4-5-20251213
+  qwen-coder       qwen3-coder:30b           (local · Ollama)
+  glm-flash        glm-4.7-flash:q4          (local · Ollama)
+  gemma            gemma4:26b                (local · Ollama)
 
 Next
   /model           Show the current model

@@ -217,13 +217,17 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "bash",
-            description: "Execute a shell command in the current workspace.",
+            description: "Execute a shell command in the current workspace.\n\nUsage:\n- Use this for system commands and terminal operations that don't have a dedicated tool.\n- For reading files, use read_file. For editing files, use edit_file. For writing files, use write_file. For finding files, use glob_search. For content search, use grep_search.\n- Quote file paths that contain spaces with double quotes (e.g., cd \"path with spaces/file.txt\").\n- Avoid running interactive commands that require human input — they will hang.\n- The `run_in_background` parameter runs the command in the background; you'll be notified when it completes.\n- Default timeout is 120000 ms (2 minutes); max 600000 ms (10 minutes). Pass `timeout` in MILLISECONDS, not seconds.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string" },
-                    "timeout": { "type": "integer", "minimum": 1 },
-                    "description": { "type": "string" },
+                    "command": { "type": "string", "description": "The shell command to execute." },
+                    "timeout": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional timeout in MILLISECONDS. Defaults to 120000 (2 minutes). Max 600000."
+                    },
+                    "description": { "type": "string", "description": "Short (5-10 word) explanation of what this command does." },
                     "run_in_background": { "type": "boolean" },
                     "dangerouslyDisableSandbox": { "type": "boolean" }
                 },
@@ -234,13 +238,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file",
-            description: "Read a text file from the workspace.",
+            description: "Read a file from the local filesystem.\n\nUsage:\n- The `path` argument must be an absolute path, not a relative path.\n- By default, reads up to 2000 lines starting from the beginning.\n- When you already know which part of the file you need, use `offset` and `limit` to read just that part — important for larger files.\n- Results are returned with line numbers (cat -n format), starting at 1.\n- This tool can read images and PDFs as well as text files.\n- It is okay to read a file that does not exist; you will get an error you can react to.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1 }
+                    "path": { "type": "string", "description": "Absolute path to the file to read." },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Line number to start reading from. Only provide for large files." },
+                    "limit": { "type": "integer", "minimum": 1, "description": "Number of lines to read." }
                 },
                 "required": ["path"],
                 "additionalProperties": false
@@ -249,12 +253,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "write_file",
-            description: "Write a text file in the workspace.",
+            description: "Writes a file to the local filesystem.\n\nUsage:\n- This tool will overwrite the existing file if there is one at the provided path.\n- If this is an existing file, you MUST use the read_file tool first to read the file's contents. Do not write blindly over a file you haven't read.\n- Prefer the edit_file tool for modifying existing files — it only sends the diff. Only use this tool to create new files or for complete rewrites.\n- NEVER create documentation files (*.md) or README files unless explicitly requested by the user.\n- Only use emojis if the user explicitly requests it.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "content": { "type": "string" }
+                    "path": { "type": "string", "description": "Absolute path to the file to write." },
+                    "content": { "type": "string", "description": "Full file contents." }
                 },
                 "required": ["path", "content"],
                 "additionalProperties": false
@@ -263,14 +267,14 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "edit_file",
-            description: "Replace text in a workspace file.",
+            description: "Performs exact string replacements in files.\n\nUsage:\n- You must use read_file at least once in the conversation before editing a file. This tool will error if you attempt an edit without reading.\n- When editing text from read_file output, ensure you preserve the exact indentation (tabs/spaces) AFTER the line number prefix. Never include the line number prefix in `old_string` or `new_string`.\n- ALWAYS prefer editing existing files over creating new ones.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context, or use `replace_all` to change every occurrence.\n- Use `replace_all` for renaming a variable or symbol across the file.\n- Only use emojis if the user explicitly requests it.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "old_string": { "type": "string" },
-                    "new_string": { "type": "string" },
-                    "replace_all": { "type": "boolean" }
+                    "path": { "type": "string", "description": "Absolute path to the file to edit." },
+                    "old_string": { "type": "string", "description": "Exact text to find. Must be unique in the file unless replace_all is true." },
+                    "new_string": { "type": "string", "description": "Replacement text. Must differ from old_string." },
+                    "replace_all": { "type": "boolean", "description": "Replace every occurrence." }
                 },
                 "required": ["path", "old_string", "new_string"],
                 "additionalProperties": false
@@ -279,12 +283,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "glob_search",
-            description: "Find files by glob pattern.",
+            description: "- Fast file-pattern matching tool that works with any codebase size.\n- Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\".\n- Returns matching file paths sorted by modification time.\n- Use this when you need to find files by name pattern. Do NOT use the bash `find` or `ls` for this.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
-                    "path": { "type": "string" }
+                    "pattern": { "type": "string", "description": "Glob pattern, e.g. **/*.rs" },
+                    "path": { "type": "string", "description": "Optional directory to search under (default: workspace root)." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -293,7 +297,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "grep_search",
-            description: "Search file contents with a regex pattern.",
+            description: "A powerful content-search tool built on ripgrep.\n\nUsage:\n- ALWAYS use grep_search for content searches. NEVER invoke `grep` or `rg` via bash. This tool has been optimized for correct permissions and access.\n- Supports full regex (e.g., \"log.*Error\", \"function\\\\s+\\\\w+\").\n- Filter files with the `glob` parameter (e.g., \"*.rs\", \"**/*.tsx\") or `type` parameter (e.g., \"rust\", \"py\").\n- Output modes: `files_with_matches` (default — just paths), `content` (matching lines), `count` (match counts per file).\n- For open-ended searches that may need multiple rounds of glob/grep, prefer staging via the bash tool with limited scope.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -319,13 +323,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "WebFetch",
-            description:
-                "Fetch a URL, convert it into readable text, and answer a prompt about it.",
+            description: "Fetches content from a specified URL and processes it.\n\nUsage:\n- Use this when you need to retrieve specific web content from a known URL.\n- Pair the `url` with a `prompt` describing what to extract from the page (e.g., \"summarize the main claim\", \"extract all hyperlinks\").\n- For open-ended discovery (\"find me a page about X\"), use WebSearch first instead.\n- The URL must be a fully-formed valid URL. HTTP URLs will be upgraded to HTTPS automatically.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "url": { "type": "string", "format": "uri" },
-                    "prompt": { "type": "string" }
+                    "url": { "type": "string", "format": "uri", "description": "Fully-formed URL to fetch." },
+                    "prompt": { "type": "string", "description": "What information to extract from the fetched page." }
                 },
                 "required": ["url", "prompt"],
                 "additionalProperties": false
@@ -334,19 +337,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "WebSearch",
-            description: "Search the web for current information and return cited results.",
+            description: "Searches the web and returns formatted results.\n\nUsage:\n- Use this for current events, recent data, or anything beyond your training cutoff.\n- Returns search-result blocks including titles and URLs.\n\nCRITICAL: After using WebSearch to answer the user's question, you MUST include a \"Sources:\" section at the end of your response with the relevant URLs as markdown hyperlinks. Format: `[Title](URL)`. This is mandatory — never skip sources.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "minLength": 2 },
-                    "allowed_domains": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    },
-                    "blocked_domains": {
-                        "type": "array",
-                        "items": { "type": "string" }
-                    }
+                    "query": { "type": "string", "minLength": 2, "description": "Search query." },
+                    "allowed_domains": { "type": "array", "items": { "type": "string" } },
+                    "blocked_domains": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["query"],
                 "additionalProperties": false

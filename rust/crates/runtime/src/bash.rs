@@ -106,7 +106,17 @@ async fn execute_bash_async(
 ) -> io::Result<BashCommandOutput> {
     let mut command = prepare_tokio_command(&input.command, &cwd, &sandbox_status, true);
 
-    let output_result = if let Some(timeout_ms) = input.timeout {
+    // Default timeout when the model doesn't specify one. 2 minutes is the
+    // same default Claude Code uses (see src/utils/timeouts.ts in the leaked
+    // source). Prevents the previous bug where small models sent `timeout: 10`
+    // assuming seconds and got a 10-millisecond execution window.
+    const DEFAULT_BASH_TIMEOUT_MS: u64 = 120_000;
+    const MAX_BASH_TIMEOUT_MS: u64 = 600_000;
+    let timeout_ms = input
+        .timeout
+        .unwrap_or(DEFAULT_BASH_TIMEOUT_MS)
+        .min(MAX_BASH_TIMEOUT_MS);
+    let output_result = {
         match timeout(Duration::from_millis(timeout_ms), command.output()).await {
             Ok(result) => (result?, false),
             Err(_) => {
@@ -129,8 +139,6 @@ async fn execute_bash_async(
                 });
             }
         }
-    } else {
-        (command.output().await?, false)
     };
 
     let (output, interrupted) = output_result;

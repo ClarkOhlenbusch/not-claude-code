@@ -28,6 +28,7 @@ pub enum ProviderKind {
     ClawApi,
     Xai,
     OpenAi,
+    Ollama,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,69 @@ const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
         },
     ),
+    (
+        "qwen-coder",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "qwen3-coder:30b",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "glm-flash",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "glm-4.7-flash:q4",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "gemma",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "gemma4:26b",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
+    (
+        "qwen2.5-coder:14b",
+        ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
+        },
+    ),
 ];
 
 #[must_use]
@@ -161,6 +225,12 @@ pub fn resolve_model_alias(model: &str) -> String {
                     _ => trimmed,
                 },
                 ProviderKind::OpenAi => trimmed,
+                ProviderKind::Ollama => match *alias {
+                    "qwen-coder" => "qwen3-coder:30b",
+                    "glm-flash" => "glm-4.7-flash:q4",
+                    "gemma" => "gemma4:26b",
+                    _ => trimmed,
+                },
             })
         })
         .map_or_else(|| trimmed.to_string(), ToOwned::to_owned)
@@ -179,6 +249,14 @@ pub fn metadata_for_model(model: &str) -> Option<ProviderMetadata> {
             auth_env: "XAI_API_KEY",
             base_url_env: "XAI_BASE_URL",
             default_base_url: openai_compat::DEFAULT_XAI_BASE_URL,
+        });
+    }
+    if lower.contains(':') && !lower.starts_with("claude") {
+        return Some(ProviderMetadata {
+            provider: ProviderKind::Ollama,
+            auth_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: openai_compat::DEFAULT_OLLAMA_BASE_URL,
         });
     }
     None

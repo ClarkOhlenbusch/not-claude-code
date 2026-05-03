@@ -23,6 +23,7 @@ pub enum ProviderClient {
     ClawApi(ClawApiClient),
     Xai(OpenAiCompatClient),
     OpenAi(OpenAiCompatClient),
+    Ollama(OpenAiCompatClient),
 }
 
 impl ProviderClient {
@@ -46,6 +47,9 @@ impl ProviderClient {
             ProviderKind::OpenAi => Ok(Self::OpenAi(OpenAiCompatClient::from_env(
                 OpenAiCompatConfig::openai(),
             )?)),
+            ProviderKind::Ollama => Ok(Self::Ollama(OpenAiCompatClient::from_env(
+                OpenAiCompatConfig::ollama(),
+            )?)),
         }
     }
 
@@ -55,6 +59,7 @@ impl ProviderClient {
             Self::ClawApi(_) => ProviderKind::ClawApi,
             Self::Xai(_) => ProviderKind::Xai,
             Self::OpenAi(_) => ProviderKind::OpenAi,
+            Self::Ollama(_) => ProviderKind::Ollama,
         }
     }
 
@@ -64,7 +69,9 @@ impl ProviderClient {
     ) -> Result<MessageResponse, ApiError> {
         match self {
             Self::ClawApi(client) => send_via_provider(client, request).await,
-            Self::Xai(client) | Self::OpenAi(client) => send_via_provider(client, request).await,
+            Self::Xai(client) | Self::OpenAi(client) | Self::Ollama(client) => {
+                send_via_provider(client, request).await
+            }
         }
     }
 
@@ -76,9 +83,11 @@ impl ProviderClient {
             Self::ClawApi(client) => stream_via_provider(client, request)
                 .await
                 .map(MessageStream::ClawApi),
-            Self::Xai(client) | Self::OpenAi(client) => stream_via_provider(client, request)
-                .await
-                .map(MessageStream::OpenAiCompat),
+            Self::Xai(client) | Self::OpenAi(client) | Self::Ollama(client) => {
+                stream_via_provider(client, request)
+                    .await
+                    .map(MessageStream::OpenAiCompat)
+            }
         }
     }
 }

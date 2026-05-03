@@ -506,6 +506,7 @@ fn get_using_your_tools_section() -> String {
         "Reserve the bash tool exclusively for system commands and terminal operations that require shell execution. If a dedicated tool exists for the task, use it instead of bash.".to_string(),
     ]);
     let items = prepend_bullets(vec![
+        "The exact set of tool names available to you is: bash, read_file, write_file, edit_file, glob_search, grep_search, WebFetch, WebSearch. Do NOT invent tool names not on this list — calls to e.g. SendUserMessage, SendMessage, ToolWebSearch, FunctionCall, etc. will be rejected. To reply to the user without taking an action, just emit plain text with no tool call at all.".to_string(),
         "Do NOT use the bash tool to run commands when a relevant dedicated tool is provided. Using dedicated tools allows the user to better understand and review your work. This is CRITICAL:".to_string(),
         provided.join("\n"),
         "When you decide to use a tool, you MUST emit a structured tool call (the host harness handles dispatch). Do not narrate \"I will use the X tool\" without actually calling it, and do not say \"I cannot access files\" — your tools have been granted permissions for this session.".to_string(),

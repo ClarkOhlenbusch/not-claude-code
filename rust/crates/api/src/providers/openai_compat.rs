@@ -16,6 +16,8 @@ use super::{Provider, ProviderFuture};
 
 pub const DEFAULT_XAI_BASE_URL: &str = "https://api.x.ai/v1";
 pub const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434/v1";
+const OLLAMA_PLACEHOLDER_KEY: &str = "ollama";
 const REQUEST_ID_HEADER: &str = "request-id";
 const ALT_REQUEST_ID_HEADER: &str = "x-request-id";
 const DEFAULT_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
@@ -53,6 +55,17 @@ impl OpenAiCompatConfig {
             default_base_url: DEFAULT_OPENAI_BASE_URL,
         }
     }
+
+    #[must_use]
+    pub const fn ollama() -> Self {
+        Self {
+            provider_name: "Ollama",
+            api_key_env: "OLLAMA_API_KEY",
+            base_url_env: "OLLAMA_BASE_URL",
+            default_base_url: DEFAULT_OLLAMA_BASE_URL,
+        }
+    }
+
     #[must_use]
     pub fn credential_env_vars(self) -> &'static [&'static str] {
         match self.provider_name {
@@ -87,6 +100,11 @@ impl OpenAiCompatClient {
     }
 
     pub fn from_env(config: OpenAiCompatConfig) -> Result<Self, ApiError> {
+        if config.provider_name == "Ollama" {
+            let api_key = read_env_non_empty(config.api_key_env)?
+                .unwrap_or_else(|| OLLAMA_PLACEHOLDER_KEY.to_string());
+            return Ok(Self::new(api_key, config));
+        }
         let Some(api_key) = read_env_non_empty(config.api_key_env)? else {
             return Err(ApiError::missing_credentials(
                 config.provider_name,
@@ -832,7 +850,7 @@ fn build_chat_completion_request(request: &MessageRequest) -> Value {
     }
 
     let mut payload = json!({
-        "model": request.model,
+        "model": super::resolve_model_alias(&request.model),
         "max_tokens": request.max_tokens,
         "messages": messages,
         "stream": request.stream,
