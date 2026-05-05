@@ -163,7 +163,7 @@ Lesson: every gap between claw's prompt scaffolding and Claude Code's makes the 
 
 ## How the routing works
 
-`claw` ships with three providers in `crates/api/src/providers/`: `claw_provider` (Anthropic), `openai_compat` (OpenAI / xAI / anything that speaks OpenAI chat-completions). The CLI calls `ProviderClient::from_model(&model)` which picks a provider by:
+`claw` ships with three providers in `crates/api/src/providers/`: `claw_provider` (Anthropic), `openai_compat` (OpenAI / xAI / anything that speaks OpenAI chat-completions). The CLI calls `ProviderClient::from_model(&model)` which picks a provider by:-
 
 1. If model name matches `MODEL_REGISTRY` (claude-*, grok-*, opus, sonnet, haiku) → that provider's metadata.
 2. Else if `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / saved Claw OAuth available → `ClawApi`.
