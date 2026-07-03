@@ -1,0 +1,25 @@
+Create a directory at /Users/francescoduca/Documents/New project/bench_real/output/eval-simple. Inside it, create a file
+called data.csv with the following exact contents:
+
+name,age,city
+Alice,30,Boston
+Bob,25,Seattle
+Carol,35,Austin
+David,28,Denver
+Eve,42,Portland
+
+Then write a Python script at /Users/francescoduca/Documents/New project/bench_real/output/eval-simple/csv_to_json.py that
+reads data.csv from the same directory and writes data.json as a
+JSON array of objects (one object per row, with keys name, age,
+city). The age field should be an integer, not a string.
+
+Run the script and verify that data.json was created and contains
+valid JSON with 5 objects. Print the contents of data.json to
+confirm.
+
+Success criteria (what you check after):
+
+/Users/francescoduca/Documents/New project/bench_real/output/eval-simple/data.csv exists with correct contents
+/Users/francescoduca/Documents/New project/bench_real/output/eval-simple/csv_to_json.py exists
+/Users/francescoduca/Documents/New project/bench_real/output/eval-simple/data.json exists, is valid JSON, has 5 objects
+age values are integers (e.g., 30 not "30")

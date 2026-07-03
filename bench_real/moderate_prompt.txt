@@ -1,0 +1,32 @@
+Create a directory at /Users/francescoduca/Documents/New project/bench_real/output/eval-html. Inside it, create a single
+file called index.html that displays a webpage saying "hey sundai!"
+styled in a retro pixel/arcade aesthetic. Specifically:
+
+Dark navy background (around #0F1729 or similar dark blue)
+The text "hey sundai!" displayed prominently in the center of
+the page, large (at least 64px), in a pixel-style monospace
+font (use "Press Start 2P" from Google Fonts, or fall back to
+monospace)
+The text should be white or light-colored for contrast
+Below the main text, add a subtitle that says "Building &
+Launching AI Prototypes Every Sunday." in a smaller monospace
+font
+Include a blinking cursor character (|) at the end of the
+subtitle using a CSS animation
+The page should be fully self-contained - all CSS in a <style>
+tag in the <head>, no external files except the Google Font
+import
+
+After creating the file, open it in the default browser using the
+macOS open command and confirm the file was created by listing
+the directory contents.
+
+Success criteria (what you check after):
+
+/Users/francescoduca/Documents/New project/bench_real/output/eval-html/index.html exists
+Opens in browser without errors
+Dark navy background visible
+"hey sundai!" displayed prominently and centered
+Pixel/monospace font is loaded (not default Times New Roman)
+Subtitle present with blinking cursor
+All CSS inline (no missing external stylesheets)
